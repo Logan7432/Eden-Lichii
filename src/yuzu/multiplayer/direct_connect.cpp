@@ -20,6 +20,7 @@
 #include "yuzu/multiplayer/client_room.h"
 #include "yuzu/multiplayer/direct_connect.h"
 #include "yuzu/multiplayer/message.h"
+#include "yuzu/multiplayer/profile_name.h"
 #include "yuzu/multiplayer/state.h"
 #include "yuzu/multiplayer/validation.h"
 
@@ -36,12 +37,7 @@ DirectConnectWindow::DirectConnectWindow(Core::System& system_, QWidget* parent)
     connect(watcher, &QFutureWatcher<void>::finished, this, &DirectConnectWindow::OnConnection);
 
     ui->nickname->setValidator(validation.GetNickname());
-    ui->nickname->setText(
-        QString::fromStdString(UISettings::values.multiplayer_nickname.GetValue()));
-    if (ui->nickname->text().isEmpty() && !Settings::values.eden_username.GetValue().empty()) {
-        // Use yuzu Web Service user name as nickname by default
-        ui->nickname->setText(QString::fromStdString(Settings::values.eden_username.GetValue()));
-    }
+    MultiplayerProfile::Apply(ui->nickname, system);
     ui->ip->setValidator(validation.GetIP());
     ui->ip->setText(QString::fromStdString(UISettings::values.multiplayer_ip.GetValue()));
     ui->port->setValidator(validation.GetPort());
@@ -59,6 +55,7 @@ void DirectConnectWindow::RetranslateUi() {
 }
 
 void DirectConnectWindow::Connect() {
+    MultiplayerProfile::Fill(ui->nickname, system);
     if (!Network::GetSelectedNetworkInterface()) {
         NetworkMessage::ErrorManager::ShowError(
             NetworkMessage::ErrorManager::NO_INTERFACE_SELECTED);

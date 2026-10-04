@@ -206,6 +206,7 @@ add_executable(yuzu
     multiplayer/moderation_dialog.cpp
     multiplayer/moderation_dialog.h
     multiplayer/moderation_dialog.ui
+    multiplayer/profile_name.h
     multiplayer/state.cpp
     multiplayer/state.h
     multiplayer/validation.h

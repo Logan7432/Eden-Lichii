@@ -24,6 +24,7 @@
 #include "yuzu/main_window.h"
 #include "yuzu/multiplayer/host_room.h"
 #include "yuzu/multiplayer/message.h"
+#include "yuzu/multiplayer/profile_name.h"
 #include "yuzu/multiplayer/state.h"
 #include "yuzu/multiplayer/validation.h"
 #ifdef ENABLE_WEB_SERVICE
@@ -56,12 +57,7 @@ HostRoomWindow::HostRoomWindow(QWidget* parent, QStandardItemModel* list,
     connect(ui->host, &QPushButton::clicked, this, &HostRoomWindow::Host);
 
     // Restore the settings:
-    ui->username->setText(
-        QString::fromStdString(UISettings::values.multiplayer_room_nickname.GetValue()));
-    if (ui->username->text().isEmpty() && !Settings::values.eden_username.GetValue().empty()) {
-        // Use Eden Web Service user name as nickname by default
-        ui->username->setText(QString::fromStdString(Settings::values.eden_username.GetValue()));
-    }
+    MultiplayerProfile::Apply(ui->username, system);
     ui->room_name->setText(
         QString::fromStdString(UISettings::values.multiplayer_room_name.GetValue()));
     ui->port->setText(QString::number(UISettings::values.multiplayer_room_port.GetValue()));
@@ -117,6 +113,7 @@ void HostRoomWindow::Host() {
             NetworkMessage::ErrorManager::NO_INTERFACE_SELECTED);
         return;
     }
+    MultiplayerProfile::Fill(ui->username, system);
     if (!ui->username->hasAcceptableInput()) {
         NetworkMessage::ErrorManager::ShowError(NetworkMessage::ErrorManager::USERNAME_NOT_VALID);
         return;
