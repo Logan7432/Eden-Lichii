@@ -177,6 +177,9 @@ private:
     /// Shows or hides motion groupboxes based on the current controller type.
     void UpdateMotionButtons();
 
+    void UpdateMotionCalibrateButton();
+    void CalibrateMotion(const std::array<bool, Settings::NativeMotion::NumMotions>& motion_slots);
+
     /// Alters the button names based on the current controller type.
     void UpdateControllerButtonNames();
 
@@ -245,6 +248,7 @@ private:
 
     std::unique_ptr<QTimer> timeout_timer;
     std::unique_ptr<QTimer> poll_timer;
+    std::unique_ptr<QTimer> motion_calibrate_timer;
 
     /// Stores a pair of "Connected Controllers" combobox index and Controller Type enum.
     std::vector<std::pair<int, Core::HID::NpadStyleIndex>> index_controller_type_pairs;

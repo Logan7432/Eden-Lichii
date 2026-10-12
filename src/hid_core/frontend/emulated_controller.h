@@ -70,6 +70,11 @@ using SticksValues = std::array<Common::Input::StickStatus, Settings::NativeAnal
 using TriggerValues =
     std::array<Common::Input::TriggerStatus, Settings::NativeTrigger::NumTriggers>;
 using ControllerMotionValues = std::array<ControllerMotionInfo, Settings::NativeMotion::NumMotions>;
+
+struct MotionCalibrationStatus {
+    MotionCalibrationState state{MotionCalibrationState::Idle};
+    f32 progress{};
+};
 using ColorValues = std::array<Common::Input::BodyColorStatus, max_emulated_controllers>;
 using BatteryValues = std::array<Common::Input::BatteryStatus, max_emulated_controllers>;
 using CameraValues = Common::Input::CameraStatus;
@@ -313,7 +318,11 @@ public:
     void SetMotionParam(std::size_t index, Common::ParamPackage param);
 
     /// Auto calibrates the current motion devices
-    void StartMotionCalibration();
+    bool StartMotionCalibration(
+        const std::array<bool, Settings::NativeMotion::NumMotions>& motion_slots);
+    void CancelMotionCalibration();
+    MotionCalibrationStatus GetMotionCalibrationStatus() const;
+    bool HasActiveMotion(std::size_t index) const;
 
     /// Returns the latest button status from the controller with parameters
     ButtonValues GetButtonsValues() const;
@@ -651,6 +660,13 @@ private:
     ControllerMotionDevices virtual_motion_devices;
 
     std::optional<InjectedInput> Injected() const;
+    mutable std::mutex motion_calibration_mutex;
+    std::array<bool, Settings::NativeMotion::NumMotions> motion_is_sensor{};
+    std::array<bool, Settings::NativeMotion::NumMotions> motion_calibration_active{};
+    std::array<bool, Settings::NativeMotion::NumMotions> motion_calibration_requested{};
+    std::array<bool, Settings::NativeMotion::NumMotions> motion_calibration_cancelled{};
+    std::array<MotionCalibrationStatus, Settings::NativeMotion::NumMotions> motion_calibration_status{};
+    std::array<std::atomic<s64>, Settings::NativeMotion::NumMotions> motion_last_sample_time{};
 
     mutable std::mutex callback_mutex;
     ::Common::unordered_map<int, ControllerUpdateCallback> callback_list;

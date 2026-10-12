@@ -4,6 +4,7 @@
 // SPDX-FileCopyrightText: Copyright 2020 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
 #include <cmath>
 #include <numbers>
 
@@ -34,6 +35,7 @@ void MotionInput::SetAcceleration(const Common::Vec<f32, 3>& acceleration) {
 }
 
 void MotionInput::SetGyroscope(const Common::Vec<f32, 3>& gyroscope) {
+    raw_gyro = gyroscope;
     gyro = gyroscope - gyro_bias;
 
     gyro[0] = std::clamp(gyro[0], -GyroMaxValue, GyroMaxValue);
@@ -41,14 +43,8 @@ void MotionInput::SetGyroscope(const Common::Vec<f32, 3>& gyroscope) {
     gyro[2] = std::clamp(gyro[2], -GyroMaxValue, GyroMaxValue);
 
     // Auto adjust gyro_bias to minimize drift
-    if (!IsMoving(IsAtRestRelaxed)) {
+    if (!IsCalibrating() && !IsMoving(IsAtRestRelaxed)) {
         gyro_bias = (gyro_bias * 0.9999f) + (gyroscope * 0.0001f);
-    }
-
-    // Adjust drift when calibration mode is enabled
-    if (calibration_mode) {
-        gyro_bias = (gyro_bias * 0.99f) + (gyroscope * 0.01f);
-        StopCalibration();
     }
 
     if (gyro.Length() < gyro_threshold * user_gyro_threshold) {
@@ -117,16 +113,105 @@ void MotionInput::UpdateRotation(u64 elapsed_time) {
 }
 
 void MotionInput::Calibrate() {
-    calibration_mode = true;
-    calibration_counter = 0;
+    calibration_state = MotionCalibrationState::WaitingForFlat;
+    calibration_total_time = 0;
+    RestartCalibrationWindow();
 }
 
-void MotionInput::StopCalibration() {
-    if (calibration_counter++ > CalibrationSamples) {
-        calibration_mode = false;
-        ResetQuaternion();
-        ResetRotations();
+void MotionInput::CancelCalibration() {
+    calibration_state = MotionCalibrationState::Idle;
+    calibration_total_time = 0;
+    RestartCalibrationWindow();
+}
+
+void MotionInput::RestartCalibrationWindow() {
+    calibration_counter = 0;
+    calibration_time = 0;
+    calibration_gyro_sum = {};
+    calibration_accel_sum = {};
+}
+
+void MotionInput::UpdateCalibration(u64 elapsed_time) {
+    if (!IsCalibrating()) {
+        return;
     }
+    const u64 sample_time = (std::min)(elapsed_time, CalibrationMaxSampleTime);
+    calibration_total_time += sample_time;
+    if (calibration_total_time > CalibrationTimeout) {
+        calibration_state = MotionCalibrationState::Failed;
+        RestartCalibrationWindow();
+        return;
+    }
+
+    const f32 accel_length = accel.Length();
+    const bool is_face_up =
+        accel_length >= 0.9f && accel_length <= 1.1f && accel.z <= CalibrationFaceUpLimit;
+    if (!is_face_up) {
+        calibration_state = MotionCalibrationState::WaitingForFlat;
+        RestartCalibrationWindow();
+        return;
+    }
+
+    if (calibration_counter > 0) {
+        const bool is_repeated_sample =
+            raw_gyro.x == calibration_last_gyro.x && raw_gyro.y == calibration_last_gyro.y &&
+            raw_gyro.z == calibration_last_gyro.z && accel.x == calibration_last_accel.x &&
+            accel.y == calibration_last_accel.y && accel.z == calibration_last_accel.z;
+        if (is_repeated_sample) {
+            return;
+        }
+        const f32 count = static_cast<f32>(calibration_counter);
+        const Common::Vec<f32, 3> gyro_mean = calibration_gyro_sum / count;
+        const Common::Vec<f32, 3> accel_mean = calibration_accel_sum / count;
+        if ((raw_gyro - gyro_mean).Length() > CalibrationStillGyro ||
+            (accel - accel_mean).Length() > CalibrationStillAccel) {
+            RestartCalibrationWindow();
+        }
+    }
+
+    calibration_state = MotionCalibrationState::Calibrating;
+    calibration_gyro_sum += raw_gyro;
+    calibration_accel_sum += accel;
+    calibration_last_gyro = raw_gyro;
+    calibration_last_accel = accel;
+    ++calibration_counter;
+    calibration_time += sample_time;
+
+    if (calibration_time >= CalibrationTime && calibration_counter >= CalibrationMinSamples) {
+        FinishCalibration();
+    }
+}
+
+void MotionInput::FinishCalibration() {
+    const f32 count = static_cast<f32>(calibration_counter);
+    gyro_bias = calibration_gyro_sum / count;
+    const Common::Vec<f32, 3> gravity = (calibration_accel_sum / count).Normalized();
+    quat.w = 0.0f;
+    quat.xyz = Common::Vec<f32, 3>{gravity.x, -gravity.y, gravity.z - 1.0f}.Normalized();
+    gyro = {};
+    real_error = {};
+    integral_error = {};
+    derivative_error = {};
+    reset_counter = 0;
+    ResetRotations();
+    calibration_state = MotionCalibrationState::Done;
+    RestartCalibrationWindow();
+}
+
+bool MotionInput::IsCalibrating() const {
+    return calibration_state == MotionCalibrationState::WaitingForFlat ||
+           calibration_state == MotionCalibrationState::Calibrating;
+}
+
+MotionCalibrationState MotionInput::GetCalibrationState() const {
+    return calibration_state;
+}
+
+f32 MotionInput::GetCalibrationProgress() const {
+    if (calibration_state == MotionCalibrationState::Done) {
+        return 1.0f;
+    }
+    return (std::min)(1.0f, static_cast<f32>(calibration_time) / static_cast<f32>(CalibrationTime));
 }
 
 // Based on Madgwick's implementation of Mayhony's AHRS algorithm.

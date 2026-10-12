@@ -11,6 +11,14 @@
 
 namespace Core::HID {
 
+enum class MotionCalibrationState : u8 {
+    Idle,
+    WaitingForFlat,
+    Calibrating,
+    Done,
+    Failed,
+};
+
 class MotionInput {
 public:
     static constexpr float ThresholdLoose = 0.01f;
@@ -25,7 +33,13 @@ public:
     static constexpr float GyroMaxValue = 5.0f;
     static constexpr float AccelMaxValue = 7.0f;
 
-    static constexpr std::size_t CalibrationSamples = 300;
+    static constexpr u64 CalibrationTime = 2000000;
+    static constexpr u64 CalibrationTimeout = 20000000;
+    static constexpr u64 CalibrationMaxSampleTime = 100000;
+    static constexpr std::size_t CalibrationMinSamples = 60;
+    static constexpr float CalibrationFaceUpLimit = -0.8f;
+    static constexpr float CalibrationStillGyro = 0.006f;
+    static constexpr float CalibrationStillAccel = 0.03f;
 
     explicit MotionInput();
 
@@ -54,6 +68,8 @@ public:
     void UpdateOrientation(u64 elapsed_time);
 
     void Calibrate();
+    void CancelCalibration();
+    void UpdateCalibration(u64 elapsed_time);
 
     [[nodiscard]] std::array<Common::Vec<f32, 3>, 3> GetOrientation() const;
     [[nodiscard]] Common::Vec<f32, 3> GetAcceleration() const;
@@ -65,9 +81,13 @@ public:
 
     [[nodiscard]] bool IsMoving(f32 sensitivity) const;
     [[nodiscard]] bool IsCalibrated(f32 sensitivity) const;
+    [[nodiscard]] bool IsCalibrating() const;
+    [[nodiscard]] MotionCalibrationState GetCalibrationState() const;
+    [[nodiscard]] f32 GetCalibrationProgress() const;
 
 private:
-    void StopCalibration();
+    void RestartCalibrationWindow();
+    void FinishCalibration();
     void ResetOrientation();
     void SetOrientationFromAccelerometer();
 
@@ -96,6 +116,8 @@ private:
     // Vector to be subtracted from gyro measurements
     Common::Vec<f32, 3> gyro_bias;
 
+    Common::Vec<f32, 3> raw_gyro;
+
     // Minimum gyro amplitude to detect if the device is moving
     f32 gyro_threshold = 0.0f;
 
@@ -111,11 +133,14 @@ private:
     // Use accelerometer values to calculate position
     bool only_accelerometer = true;
 
-    // When enabled it will aggressively adjust for gyro drift
-    bool calibration_mode = false;
-
-    // Used to auto disable calibration mode
+    MotionCalibrationState calibration_state = MotionCalibrationState::Idle;
     std::size_t calibration_counter = 0;
+    u64 calibration_time = 0;
+    u64 calibration_total_time = 0;
+    Common::Vec<f32, 3> calibration_gyro_sum;
+    Common::Vec<f32, 3> calibration_accel_sum;
+    Common::Vec<f32, 3> calibration_last_gyro;
+    Common::Vec<f32, 3> calibration_last_accel;
 };
 
 } // namespace Core::HID

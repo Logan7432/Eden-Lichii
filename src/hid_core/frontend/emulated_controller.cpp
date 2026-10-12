@@ -416,6 +416,13 @@ void EmulatedController::ReloadInput() {
                 },
         });
 
+        {
+            std::scoped_lock lock{motion_calibration_mutex};
+            motion_is_sensor[index] = motion_params[index].Has("motion") &&
+                                      motion_params[index].Get("engine", "") != "mouse";
+        }
+        motion_last_sample_time[index].store(0, std::memory_order_relaxed);
+
         // Restore motion state
         auto& emulated_motion = controller.motion_values[index].emulated;
         auto& motion = controller.motion_state[index];
@@ -753,10 +760,93 @@ void EmulatedController::SetMotionParam(std::size_t index, Common::ParamPackage 
     ReloadInput();
 }
 
-void EmulatedController::StartMotionCalibration() {
-    for (ControllerMotionInfo& motion : controller.motion_values) {
-        motion.emulated.Calibrate();
+bool EmulatedController::StartMotionCalibration(
+    const std::array<bool, Settings::NativeMotion::NumMotions>& motion_slots) {
+    std::array<bool, Settings::NativeMotion::NumMotions> active{};
+    for (std::size_t index = 0; index < active.size(); ++index) {
+        active[index] = motion_slots[index] && HasActiveMotion(index);
     }
+    std::scoped_lock lock{motion_calibration_mutex};
+    bool started = false;
+    for (std::size_t index = 0; index < motion_calibration_active.size(); ++index) {
+        motion_calibration_active[index] = active[index];
+        if (!motion_calibration_active[index]) {
+            continue;
+        }
+        motion_calibration_requested[index] = true;
+        motion_calibration_cancelled[index] = false;
+        motion_calibration_status[index] = {MotionCalibrationState::WaitingForFlat, 0.0f};
+        started = true;
+    }
+    return started;
+}
+
+void EmulatedController::CancelMotionCalibration() {
+    std::scoped_lock lock{motion_calibration_mutex};
+    for (std::size_t index = 0; index < motion_calibration_active.size(); ++index) {
+        if (!motion_calibration_active[index]) {
+            continue;
+        }
+        motion_calibration_active[index] = false;
+        motion_calibration_requested[index] = false;
+        motion_calibration_cancelled[index] = true;
+        motion_calibration_status[index] = {};
+    }
+}
+
+MotionCalibrationStatus EmulatedController::GetMotionCalibrationStatus() const {
+    std::scoped_lock lock{motion_calibration_mutex};
+    MotionCalibrationStatus result{};
+    bool any_active = false;
+    bool all_done = true;
+    bool any_failed = false;
+    bool any_waiting = false;
+    f32 progress = 1.0f;
+    for (std::size_t index = 0; index < motion_calibration_active.size(); ++index) {
+        if (!motion_calibration_active[index]) {
+            continue;
+        }
+        any_active = true;
+        const MotionCalibrationStatus& status = motion_calibration_status[index];
+        any_failed |= status.state == MotionCalibrationState::Failed;
+        any_waiting |= status.state == MotionCalibrationState::WaitingForFlat;
+        all_done &= status.state == MotionCalibrationState::Done;
+        progress = (std::min)(progress, status.progress);
+    }
+    if (!any_active) {
+        return result;
+    }
+    if (any_failed) {
+        result.state = MotionCalibrationState::Failed;
+    } else if (all_done) {
+        result.state = MotionCalibrationState::Done;
+    } else if (any_waiting) {
+        result.state = MotionCalibrationState::WaitingForFlat;
+    } else {
+        result.state = MotionCalibrationState::Calibrating;
+    }
+    result.progress = progress;
+    return result;
+}
+
+bool EmulatedController::HasActiveMotion(std::size_t index) const {
+    if (index >= motion_last_sample_time.size()) {
+        return false;
+    }
+    {
+        std::scoped_lock lock{motion_calibration_mutex};
+        if (!motion_is_sensor[index]) {
+            return false;
+        }
+    }
+    const s64 last_sample = motion_last_sample_time[index].load(std::memory_order_relaxed);
+    if (last_sample == 0) {
+        return false;
+    }
+    const s64 now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now().time_since_epoch())
+                        .count();
+    return now - last_sample < 500;
 }
 
 void EmulatedController::SetButton(const Common::Input::CallbackStatus& callback, std::size_t index, Common::UUID uuid) {
@@ -1035,6 +1125,23 @@ void EmulatedController::SetMotion(const Common::Input::CallbackStatus& callback
     auto& raw_status = controller.motion_values[index].raw_status;
     auto& emulated = controller.motion_values[index].emulated;
 
+    motion_last_sample_time[index].store(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch())
+            .count(),
+        std::memory_order_relaxed);
+    {
+        std::scoped_lock lock{motion_calibration_mutex};
+        if (motion_calibration_cancelled[index]) {
+            motion_calibration_cancelled[index] = false;
+            emulated.CancelCalibration();
+        }
+        if (motion_calibration_requested[index]) {
+            motion_calibration_requested[index] = false;
+            emulated.Calibrate();
+        }
+    }
+
     raw_status = TransformToMotion(callback);
     emulated.SetAcceleration(Common::Vec<f32, 3>{
         raw_status.accel.x.value,
@@ -1046,6 +1153,14 @@ void EmulatedController::SetMotion(const Common::Input::CallbackStatus& callback
         raw_status.gyro.y.value,
         raw_status.gyro.z.value,
     });
+    if (emulated.IsCalibrating()) {
+        emulated.UpdateCalibration(raw_status.delta_timestamp);
+        std::scoped_lock lock{motion_calibration_mutex};
+        if (motion_calibration_active[index] && !motion_calibration_requested[index]) {
+            motion_calibration_status[index] = {emulated.GetCalibrationState(),
+                                                emulated.GetCalibrationProgress()};
+        }
+    }
     emulated.SetUserGyroThreshold(raw_status.gyro.x.properties.threshold);
     emulated.UpdateRotation(raw_status.delta_timestamp);
     emulated.UpdateOrientation(raw_status.delta_timestamp);
