@@ -12,6 +12,7 @@
 #include <mutex>
 #include <optional>
 #include <shared_mutex>
+#include <span>
 #include <vector>
 #include <atomic>
 
@@ -131,6 +132,11 @@ struct ControllerMotion {
     Common::Vec<f32, 3> euler{};
     std::array<Common::Vec<f32, 3>, 3> orientation{};
     bool is_at_rest{};
+};
+
+struct ControllerMotionSample {
+    ControllerMotion motion{};
+    u64 delta_timestamp{};
 };
 
 enum EmulatedDeviceIndex : u8 {
@@ -371,6 +377,9 @@ public:
 
     /// Returns the latest status of motion input from the mouse
     MotionState GetMotions() const;
+
+    std::size_t PopMotionSamples(std::size_t index, std::span<ControllerMotionSample> samples);
+    bool HasMotionSamples(std::size_t index) const;
 
     /// Returns the latest color value from the controller
     ControllerColors GetColors() const;
@@ -662,11 +671,28 @@ private:
     std::optional<InjectedInput> Injected() const;
     mutable std::mutex motion_calibration_mutex;
     std::array<bool, Settings::NativeMotion::NumMotions> motion_is_sensor{};
+    std::array<std::string, Settings::NativeMotion::NumMotions> loaded_motion_params{};
+    std::array<std::string, Settings::NativeMotion::NumMotions> motion_bias_keys{};
     std::array<bool, Settings::NativeMotion::NumMotions> motion_calibration_active{};
     std::array<bool, Settings::NativeMotion::NumMotions> motion_calibration_requested{};
     std::array<bool, Settings::NativeMotion::NumMotions> motion_calibration_cancelled{};
     std::array<MotionCalibrationStatus, Settings::NativeMotion::NumMotions> motion_calibration_status{};
     std::array<std::atomic<s64>, Settings::NativeMotion::NumMotions> motion_last_sample_time{};
+
+    struct QueuedMotionSample {
+        ControllerMotionSample sample{};
+        s64 time{};
+    };
+    static constexpr std::size_t MotionSampleCapacity = 64;
+    static constexpr s64 MotionSampleMaxAge = 250000;
+    static constexpr s64 MotionSampleStreamTimeout = 500000;
+    mutable std::mutex motion_sample_mutex;
+    std::array<std::array<QueuedMotionSample, MotionSampleCapacity>,
+               Settings::NativeMotion::NumMotions>
+        motion_sample_queue{};
+    std::array<std::size_t, Settings::NativeMotion::NumMotions> motion_sample_head{};
+    std::array<std::size_t, Settings::NativeMotion::NumMotions> motion_sample_count{};
+    std::array<s64, Settings::NativeMotion::NumMotions> motion_sample_last_push{};
 
     mutable std::mutex callback_mutex;
     ::Common::unordered_map<int, ControllerUpdateCallback> callback_list;

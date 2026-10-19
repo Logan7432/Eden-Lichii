@@ -43,14 +43,41 @@ void MotionInput::SetGyroscope(const Common::Vec<f32, 3>& gyroscope) {
     gyro[2] = std::clamp(gyro[2], -GyroMaxValue, GyroMaxValue);
 
     // Auto adjust gyro_bias to minimize drift
-    if (!IsCalibrating() && !IsMoving(IsAtRestRelaxed)) {
-        gyro_bias = (gyro_bias * 0.9999f) + (gyroscope * 0.0001f);
-    }
+    UpdateAutoBias(gyroscope);
 
     if (gyro.Length() < gyro_threshold * user_gyro_threshold) {
         gyro = {};
     } else {
         only_accelerometer = false;
+    }
+}
+
+void MotionInput::UpdateAutoBias(const Common::Vec<f32, 3>& gyroscope) {
+    const f32 accel_length = accel.Length();
+    if (IsCalibrating() || accel_length < 0.9f || accel_length > 1.1f) {
+        auto_bias_counter = 0;
+        auto_bias_time = 0;
+        return;
+    }
+    if (auto_bias_counter > 0) {
+        const f32 count = static_cast<f32>(auto_bias_counter);
+        if ((gyroscope - auto_bias_gyro_sum / count).Length() > CalibrationStillGyro ||
+            (accel - auto_bias_accel_sum / count).Length() > CalibrationStillAccel) {
+            auto_bias_counter = 0;
+            auto_bias_time = 0;
+        }
+    }
+    if (auto_bias_counter == 0) {
+        auto_bias_gyro_sum = {};
+        auto_bias_accel_sum = {};
+    }
+    auto_bias_gyro_sum += gyroscope;
+    auto_bias_accel_sum += accel;
+    ++auto_bias_counter;
+    auto_bias_time += (std::min)(last_elapsed_time, CalibrationMaxSampleTime);
+    if (auto_bias_time >= AutoBiasStillTime && auto_bias_counter >= CalibrationMinSamples) {
+        gyro_bias = auto_bias_gyro_sum / static_cast<f32>(auto_bias_counter);
+        gyro_bias_learned = true;
     }
 }
 
@@ -74,6 +101,7 @@ void MotionInput::SetEulerAngles(const Common::Vec<f32, 3>& euler_angles) {
 
 void MotionInput::SetGyroBias(const Common::Vec<f32, 3>& bias) {
     gyro_bias = bias;
+    gyro_bias_learned = false;
 }
 
 void MotionInput::SetGyroThreshold(f32 threshold) {
@@ -185,19 +213,17 @@ void MotionInput::UpdateCalibration(u64 elapsed_time) {
 void MotionInput::FinishCalibration() {
     const f32 count = static_cast<f32>(calibration_counter);
     gyro_bias = calibration_gyro_sum / count;
-    const Common::Vec<f32, 3> gravity = (calibration_accel_sum / count).Normalized();
-    const Common::Vec<f32, 3> axis =
-        Common::Vec<f32, 3>{gravity[0], -gravity[1], gravity[2] - 1.0f}.Normalized();
-    quat[0] = axis[0];
-    quat[1] = axis[1];
-    quat[2] = axis[2];
-    quat[3] = 0.0f;
+    gyro_bias_learned = true;
+    accel = calibration_accel_sum / count;
     gyro = {};
+    real_error = {1.0f, 0.0f, 0.0f};
+    integral_error = {};
+    derivative_error = {};
+    SetOrientationFromAccelerometer();
     real_error = {};
     integral_error = {};
     derivative_error = {};
     reset_counter = 0;
-    ResetRotations();
     calibration_state = MotionCalibrationState::Done;
     RestartCalibrationWindow();
 }
@@ -230,6 +256,7 @@ void MotionInput::UpdateOrientation(u64 elapsed_time) {
     f32 q3 = quat[1];
     f32 q4 = quat[2];
     const auto sample_period = static_cast<f32>(elapsed_time) / 1000000.0f;
+    last_elapsed_time = elapsed_time;
 
     // Ignore invalid elapsed time
     if (sample_period > 0.1f) {
@@ -273,7 +300,7 @@ void MotionInput::UpdateOrientation(u64 elapsed_time) {
 
         // Prevent integral windup
         if (ki != 0.0f && !IsCalibrated(0.05f)) {
-            integral_error += real_error;
+            integral_error += real_error * (sample_period / IntegralReferencePeriod);
         } else {
             integral_error = {};
         }
@@ -302,13 +329,14 @@ void MotionInput::UpdateOrientation(u64 elapsed_time) {
     const f32 gz = rad_gyro[2];
 
     // Integrate rate of change of quaternion
+    const f32 pw = q1;
     const f32 pa = q2;
     const f32 pb = q3;
     const f32 pc = q4;
-    q1 = q1 + (-q2 * gx - q3 * gy - q4 * gz) * (0.5f * sample_period);
-    q2 = pa + (q1 * gx + pb * gz - pc * gy) * (0.5f * sample_period);
-    q3 = pb + (q1 * gy - pa * gz + pc * gx) * (0.5f * sample_period);
-    q4 = pc + (q1 * gz + pa * gy - pb * gx) * (0.5f * sample_period);
+    q1 = pw + (-pa * gx - pb * gy - pc * gz) * (0.5f * sample_period);
+    q2 = pa + (pw * gx + pb * gz - pc * gy) * (0.5f * sample_period);
+    q3 = pb + (pw * gy - pa * gz + pc * gx) * (0.5f * sample_period);
+    q4 = pc + (pw * gz + pa * gy - pb * gx) * (0.5f * sample_period);
 
     quat[3] = q1;
     quat[0] = q2;
@@ -340,6 +368,10 @@ Common::Vec<f32, 3> MotionInput::GetGyroscope() const {
 
 Common::Vec<f32, 3> MotionInput::GetGyroBias() const {
     return gyro_bias;
+}
+
+bool MotionInput::HasLearnedGyroBias() const {
+    return gyro_bias_learned;
 }
 
 Common::Vec<f32, 4> MotionInput::GetQuaternion() const {
@@ -432,13 +464,14 @@ void MotionInput::SetOrientationFromAccelerometer() {
         const f32 gz = rad_gyro[2];
 
         // Integrate rate of change of quaternion
+        const f32 pw = q1;
         const f32 pa = q2;
         const f32 pb = q3;
         const f32 pc = q4;
-        q1 = q1 + (-q2 * gx - q3 * gy - q4 * gz) * (0.5f * sample_period);
-        q2 = pa + (q1 * gx + pb * gz - pc * gy) * (0.5f * sample_period);
-        q3 = pb + (q1 * gy - pa * gz + pc * gx) * (0.5f * sample_period);
-        q4 = pc + (q1 * gz + pa * gy - pb * gx) * (0.5f * sample_period);
+        q1 = pw + (-pa * gx - pb * gy - pc * gz) * (0.5f * sample_period);
+        q2 = pa + (pw * gx + pb * gz - pc * gy) * (0.5f * sample_period);
+        q3 = pb + (pw * gy - pa * gz + pc * gx) * (0.5f * sample_period);
+        q4 = pc + (pw * gz + pa * gy - pb * gx) * (0.5f * sample_period);
 
         quat[3] = q1;
         quat[0] = q2;

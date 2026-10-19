@@ -111,9 +111,27 @@ Common::Input::DriverResult JoyconDriver::InitializeDevice() {
     supported_features = GetSupportedFeatures();
 
     // Get Calibration data
-    calibration_protocol->GetLeftJoyStickCalibration(left_stick_calibration);
-    calibration_protocol->GetRightJoyStickCalibration(right_stick_calibration);
-    calibration_protocol->GetImuCalibration(motion_calibration);
+    constexpr int calibration_attempts = 5;
+    for (int attempt = 0; attempt < calibration_attempts; ++attempt) {
+        if (calibration_protocol->GetLeftJoyStickCalibration(left_stick_calibration) ==
+            Common::Input::DriverResult::Success) {
+            break;
+        }
+    }
+    for (int attempt = 0; attempt < calibration_attempts; ++attempt) {
+        if (calibration_protocol->GetRightJoyStickCalibration(right_stick_calibration) ==
+            Common::Input::DriverResult::Success) {
+            break;
+        }
+    }
+    bool imu_calibration_read = false;
+    for (int attempt = 0; attempt < calibration_attempts && !imu_calibration_read; ++attempt) {
+        imu_calibration_read = calibration_protocol->GetImuCalibration(motion_calibration) ==
+                               Common::Input::DriverResult::Success;
+    }
+    if (!imu_calibration_read) {
+        LOG_WARNING(Input, "Could not read the motion calibration, using default values");
+    }
 
     // Set led status
     generic_protocol->SetLedBlinkPattern(static_cast<u8>(1 + port));
@@ -158,23 +176,20 @@ void JoyconDriver::InputThread(std::stop_token stop_token) {
         if (!disable_input_thread) {
             status = SDL_hid_read_timeout(hidapi_handle->handle, buffer.data(), buffer.size(),
                                           ThreadDelay);
+            while (IsPayloadCorrect(status, buffer)) {
+                OnNewData(buffer);
+                status =
+                    SDL_hid_read_timeout(hidapi_handle->handle, buffer.data(), buffer.size(), 0);
+            }
         } else {
             std::this_thread::sleep_for(std::chrono::milliseconds(ThreadDelay));
         }
 
-        if (IsPayloadCorrect(status, buffer)) {
-            OnNewData(buffer);
-        }
-
         if (!vibration_queue.Empty()) {
             VibrationValue vibration_value;
-            vibration_queue.Pop(vibration_value);
+            while (vibration_queue.Pop(vibration_value)) {
+            }
             last_vibration_result = rumble_protocol->SendVibration(vibration_value);
-        }
-
-        // We can't keep up with vibrations. Start skipping.
-        while (vibration_queue.Size() > 6) {
-            vibration_queue.Pop();
         }
 
         std::this_thread::yield();
@@ -188,20 +203,30 @@ void JoyconDriver::InputThread(std::stop_token stop_token) {
 void JoyconDriver::OnNewData(std::span<u8> buffer) {
     const auto report_mode = static_cast<ReportMode>(buffer[0]);
 
-    // Packages can be a little bit inconsistent. Average the delta time to provide a smoother
-    // motion experience
     switch (report_mode) {
     case ReportMode::STANDARD_FULL_60HZ:
-    case ReportMode::NFC_IR_MODE_60HZ:
-    case ReportMode::SIMPLE_HID_MODE: {
+    case ReportMode::NFC_IR_MODE_60HZ: {
+        constexpr u64 ReportTimerTick = 5000;
+        constexpr u64 DefaultReportTicks = 3;
+        constexpr u64 MaxReportsPerUpdate = 5;
+        constexpr auto MaxReportGap = std::chrono::milliseconds(600);
         const auto now = std::chrono::steady_clock::now();
-        const auto new_delta_time = static_cast<u64>(
-            std::chrono::duration_cast<std::chrono::microseconds>(now - last_update).count());
-        delta_time = ((delta_time * 8) + (new_delta_time * 2)) / 10;
+        const u8 report_timer = buffer[1];
+        const u8 report_ticks = static_cast<u8>(report_timer - last_report_timer);
+        const u64 reports = (static_cast<u64>(report_ticks) + 1) / DefaultReportTicks;
+        const bool is_continuous = has_report_timer && reports != 0 &&
+                                   reports <= MaxReportsPerUpdate &&
+                                   now - last_update < MaxReportGap;
+        delta_time = (is_continuous ? reports : 1) * DefaultReportTicks * ReportTimerTick;
+        last_report_timer = report_timer;
+        has_report_timer = true;
         last_update = now;
         joycon_poller->UpdateColor(color);
         break;
     }
+    case ReportMode::SIMPLE_HID_MODE:
+        joycon_poller->UpdateColor(color);
+        break;
     default:
         break;
     }

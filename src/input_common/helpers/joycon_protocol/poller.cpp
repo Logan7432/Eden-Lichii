@@ -4,7 +4,12 @@
 // SPDX-FileCopyrightText: Copyright 2022 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
+#include <cmath>
+#include <cstring>
 #include <vector>
+
+#include "common/logging.h"
 #include "input_common/helpers/joycon_protocol/poller.h"
 
 namespace InputCommon::Joycon {
@@ -24,15 +29,22 @@ void JoyconPoller::ReadActiveMode(std::span<u8> buffer, const MotionStatus& moti
     InputReportActive data{};
     memcpy(&data, buffer.data(), sizeof(InputReportActive));
 
+    MotionSamples motion_samples{};
+    const std::size_t motion_sample_count =
+        motion_status.is_enabled
+            ? GetMotionSamples(buffer, motion_status, ring_status.is_enabled, motion_samples)
+            : 0;
+    const std::span<const MotionData> motion_span{motion_samples.data(), motion_sample_count};
+
     switch (device_type) {
     case ControllerType::Left:
-        UpdateActiveLeftPadInput(data, motion_status);
+        UpdateActiveLeftPadInput(data, motion_span);
         break;
     case ControllerType::Right:
-        UpdateActiveRightPadInput(data, motion_status);
+        UpdateActiveRightPadInput(data, motion_span);
         break;
     case ControllerType::Pro:
-        UpdateActiveProPadInput(data, motion_status);
+        UpdateActiveProPadInput(data, motion_span);
         break;
     default:
         break;
@@ -95,7 +107,7 @@ void JoyconPoller::UpdateRing(s16 value, const RingStatus& ring_status) {
 }
 
 void JoyconPoller::UpdateActiveLeftPadInput(const InputReportActive& input,
-                                            const MotionStatus& motion_status) {
+                                            std::span<const MotionData> motion_samples) {
     static constexpr std::array<Joycon::PadButton, 11> left_buttons{
         Joycon::PadButton::Down,    Joycon::PadButton::Up,     Joycon::PadButton::Right,
         Joycon::PadButton::Left,    Joycon::PadButton::LeftSL, Joycon::PadButton::LeftSR,
@@ -120,8 +132,7 @@ void JoyconPoller::UpdateActiveLeftPadInput(const InputReportActive& input,
     callbacks.on_stick_data(static_cast<int>(PadAxes::LeftStickX), left_axis_x);
     callbacks.on_stick_data(static_cast<int>(PadAxes::LeftStickY), left_axis_y);
 
-    if (motion_status.is_enabled) {
-        auto left_motion = GetMotionInput(input, motion_status);
+    for (auto left_motion : motion_samples) {
         // Rotate motion axis to the correct direction
         left_motion.accel_y = -left_motion.accel_y;
         left_motion.accel_z = -left_motion.accel_z;
@@ -131,7 +142,7 @@ void JoyconPoller::UpdateActiveLeftPadInput(const InputReportActive& input,
 }
 
 void JoyconPoller::UpdateActiveRightPadInput(const InputReportActive& input,
-                                             const MotionStatus& motion_status) {
+                                             std::span<const MotionData> motion_samples) {
     static constexpr std::array<Joycon::PadButton, 11> right_buttons{
         Joycon::PadButton::Y,    Joycon::PadButton::X,       Joycon::PadButton::B,
         Joycon::PadButton::A,    Joycon::PadButton::RightSL, Joycon::PadButton::RightSR,
@@ -156,8 +167,7 @@ void JoyconPoller::UpdateActiveRightPadInput(const InputReportActive& input,
     callbacks.on_stick_data(static_cast<int>(PadAxes::RightStickX), right_axis_x);
     callbacks.on_stick_data(static_cast<int>(PadAxes::RightStickY), right_axis_y);
 
-    if (motion_status.is_enabled) {
-        auto right_motion = GetMotionInput(input, motion_status);
+    for (auto right_motion : motion_samples) {
         // Rotate motion axis to the correct direction
         right_motion.accel_x = -right_motion.accel_x;
         right_motion.accel_y = -right_motion.accel_y;
@@ -167,7 +177,7 @@ void JoyconPoller::UpdateActiveRightPadInput(const InputReportActive& input,
 }
 
 void JoyconPoller::UpdateActiveProPadInput(const InputReportActive& input,
-                                           const MotionStatus& motion_status) {
+                                           std::span<const MotionData> motion_samples) {
     static constexpr std::array<Joycon::PadButton, 18> pro_buttons{
         Joycon::PadButton::Down,  Joycon::PadButton::Up,      Joycon::PadButton::Right,
         Joycon::PadButton::Left,  Joycon::PadButton::L,       Joycon::PadButton::ZL,
@@ -203,8 +213,7 @@ void JoyconPoller::UpdateActiveProPadInput(const InputReportActive& input,
     callbacks.on_stick_data(static_cast<int>(PadAxes::RightStickX), right_axis_x);
     callbacks.on_stick_data(static_cast<int>(PadAxes::RightStickY), right_axis_y);
 
-    if (motion_status.is_enabled) {
-        auto pro_motion = GetMotionInput(input, motion_status);
+    for (auto pro_motion : motion_samples) {
         pro_motion.gyro_x = -pro_motion.gyro_x;
         pro_motion.accel_y = -pro_motion.accel_y;
         pro_motion.accel_z = -pro_motion.accel_z;
@@ -347,17 +356,17 @@ s16 JoyconPoller::GetRawIMUValues(std::size_t sensor, size_t axis,
     return input.motion_input[(sensor * 3) + axis];
 }
 
-MotionData JoyconPoller::GetMotionInput(const InputReportActive& input,
+MotionData JoyconPoller::GetMotionInput(const std::array<s16, 6>& raw_sample,
                                         const MotionStatus& motion_status) const {
     MotionData motion{};
     const auto& accel_cal = motion_calibration.accelerometer;
     const auto& gyro_cal = motion_calibration.gyro;
-    const s16 raw_accel_x = input.motion_input[1];
-    const s16 raw_accel_y = input.motion_input[0];
-    const s16 raw_accel_z = input.motion_input[2];
-    const s16 raw_gyro_x = input.motion_input[4];
-    const s16 raw_gyro_y = input.motion_input[3];
-    const s16 raw_gyro_z = input.motion_input[5];
+    const s16 raw_accel_x = raw_sample[1];
+    const s16 raw_accel_y = raw_sample[0];
+    const s16 raw_accel_z = raw_sample[2];
+    const s16 raw_gyro_x = raw_sample[4];
+    const s16 raw_gyro_y = raw_sample[3];
+    const s16 raw_gyro_z = raw_sample[5];
 
     motion.delta_timestamp = motion_status.delta_time;
     motion.accel_x =
@@ -370,8 +379,53 @@ MotionData JoyconPoller::GetMotionInput(const InputReportActive& input,
     motion.gyro_y = GetGyroValue(raw_gyro_y, gyro_cal[0], motion_status.gyro_sensitivity);
     motion.gyro_z = GetGyroValue(raw_gyro_z, gyro_cal[2], motion_status.gyro_sensitivity);
 
-    // TODO(German77): Return all three samples data
     return motion;
+}
+
+std::size_t JoyconPoller::GetMotionSamples(std::span<const u8> buffer,
+                                           const MotionStatus& motion_status, bool is_ring_enabled,
+                                           MotionSamples& samples) {
+    constexpr std::size_t ImuOffset = 13;
+    constexpr std::size_t ImuSampleCount = 3;
+    constexpr std::size_t ImuSampleSize = 6 * sizeof(s16);
+    constexpr u64 ImuSamplePeriod = 5000;
+
+    std::size_t available = is_ring_enabled ? ImuSampleCount - 1 : ImuSampleCount;
+    while (available > 0 && buffer.size() < ImuOffset + ImuSampleSize * available) {
+        --available;
+    }
+    if (available == 0) {
+        return 0;
+    }
+
+    std::array<std::array<s16, 6>, ImuSampleCount> raw_samples{};
+    std::memcpy(raw_samples.data(), buffer.data() + ImuOffset, ImuSampleSize * available);
+
+    const std::size_t sample_count = static_cast<std::size_t>(
+        std::clamp<u64>(motion_status.delta_time / ImuSamplePeriod, available, samples.size()));
+    const std::size_t fill_count = has_last_motion_sample ? sample_count - available : 0;
+    const auto& oldest_sample = raw_samples[available - 1];
+    std::size_t count = 0;
+    for (std::size_t fill = 1; fill <= fill_count; ++fill) {
+        const f32 weight = static_cast<f32>(fill) / static_cast<f32>(fill_count + 1);
+        std::array<s16, 6> blended_sample{};
+        for (std::size_t axis = 0; axis < blended_sample.size(); ++axis) {
+            const f32 from = last_motion_sample[axis];
+            const f32 to = oldest_sample[axis];
+            blended_sample[axis] = static_cast<s16>(std::lround(from + (to - from) * weight));
+        }
+        samples[count] = GetMotionInput(blended_sample, motion_status);
+        samples[count].delta_timestamp = ImuSamplePeriod;
+        ++count;
+    }
+    for (std::size_t index = available; index-- > 0;) {
+        samples[count] = GetMotionInput(raw_samples[index], motion_status);
+        samples[count].delta_timestamp = ImuSamplePeriod;
+        ++count;
+    }
+    last_motion_sample = raw_samples[0];
+    has_last_motion_sample = true;
+    return count;
 }
 
 } // namespace InputCommon::Joycon

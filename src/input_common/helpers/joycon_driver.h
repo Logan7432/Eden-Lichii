@@ -111,10 +111,12 @@ private:
 
     // Connection status
     std::atomic<bool> is_connected{};
-    u64 delta_time;
+    u64 delta_time{};
     std::size_t error_counter{};
     std::shared_ptr<JoyconHandle> hidapi_handle;
     std::chrono::time_point<std::chrono::steady_clock> last_update;
+    u8 last_report_timer{};
+    bool has_report_timer{};
 
     // External device status
     bool starlink_connected{};

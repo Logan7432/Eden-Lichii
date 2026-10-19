@@ -40,6 +40,8 @@ public:
     static constexpr float CalibrationFaceUpLimit = -0.8f;
     static constexpr float CalibrationStillGyro = 0.006f;
     static constexpr float CalibrationStillAccel = 0.03f;
+    static constexpr u64 AutoBiasStillTime = 1000000;
+    static constexpr f32 IntegralReferencePeriod = 0.015f;
 
     explicit MotionInput();
 
@@ -75,6 +77,7 @@ public:
     [[nodiscard]] Common::Vec<f32, 3> GetAcceleration() const;
     [[nodiscard]] Common::Vec<f32, 3> GetGyroscope() const;
     [[nodiscard]] Common::Vec<f32, 3> GetGyroBias() const;
+    [[nodiscard]] bool HasLearnedGyroBias() const;
     [[nodiscard]] Common::Vec<f32, 3> GetRotations() const;
     [[nodiscard]] Common::Vec<f32, 4> GetQuaternion() const;
     [[nodiscard]] Common::Vec<f32, 3> GetEulerAngles() const;
@@ -90,6 +93,7 @@ private:
     void FinishCalibration();
     void ResetOrientation();
     void SetOrientationFromAccelerometer();
+    void UpdateAutoBias(const Common::Vec<f32, 3>& gyroscope);
 
     // PID constants
     f32 kp;
@@ -141,6 +145,12 @@ private:
     Common::Vec<f32, 3> calibration_accel_sum;
     Common::Vec<f32, 3> calibration_last_gyro;
     Common::Vec<f32, 3> calibration_last_accel;
+    Common::Vec<f32, 3> auto_bias_gyro_sum;
+    Common::Vec<f32, 3> auto_bias_accel_sum;
+    std::size_t auto_bias_counter = 0;
+    u64 auto_bias_time = 0;
+    u64 last_elapsed_time = 0;
+    bool gyro_bias_learned = false;
 };
 
 } // namespace Core::HID

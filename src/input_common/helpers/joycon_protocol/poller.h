@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <array>
 #include <functional>
 #include <span>
 
@@ -40,11 +41,15 @@ public:
     void UpdateCamera(const std::vector<u8>& camera_data, IrsResolution format);
 
 private:
+    static constexpr std::size_t MaxMotionSamples = 16;
+    using MotionSamples = std::array<MotionData, MaxMotionSamples>;
+
     void UpdateActiveLeftPadInput(const InputReportActive& input,
-                                  const MotionStatus& motion_status);
+                                  std::span<const MotionData> motion_samples);
     void UpdateActiveRightPadInput(const InputReportActive& input,
-                                   const MotionStatus& motion_status);
-    void UpdateActiveProPadInput(const InputReportActive& input, const MotionStatus& motion_status);
+                                   std::span<const MotionData> motion_samples);
+    void UpdateActiveProPadInput(const InputReportActive& input,
+                                 std::span<const MotionData> motion_samples);
 
     void UpdatePassiveLeftPadInput(const InputReportPassive& buffer);
     void UpdatePassiveRightPadInput(const InputReportPassive& buffer);
@@ -68,8 +73,11 @@ private:
     s16 GetRawIMUValues(size_t sensor, size_t axis, const InputReportActive& input) const;
 
     /// Returns motion data from a buffer
-    MotionData GetMotionInput(const InputReportActive& input,
+    MotionData GetMotionInput(const std::array<s16, 6>& raw_sample,
                               const MotionStatus& motion_status) const;
+
+    std::size_t GetMotionSamples(std::span<const u8> buffer, const MotionStatus& motion_status,
+                                 bool is_ring_enabled, MotionSamples& samples);
 
     ControllerType device_type{};
 
@@ -77,6 +85,8 @@ private:
     JoyStickCalibration left_stick_calibration{};
     JoyStickCalibration right_stick_calibration{};
     MotionCalibration motion_calibration{};
+    std::array<s16, 6> last_motion_sample{};
+    bool has_last_motion_sample{};
 
     JoyconCallbacks callbacks{};
 };

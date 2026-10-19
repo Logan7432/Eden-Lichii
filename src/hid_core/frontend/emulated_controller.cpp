@@ -5,10 +5,17 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <charconv>
 #include <chrono>
+#include <cmath>
+#include <fstream>
+#include <optional>
 #include <common/scope_exit.h>
 
 #include <ranges>
+#include <fmt/format.h>
+
+#include "common/fs/path_util.h"
 #include "common/thread.h"
 #include "common/assert.h"
 #include "hid_core/frontend/emulated_controller.h"
@@ -27,6 +34,81 @@ constexpr Common::UUID VIRTUAL_UUID =
 EmulatedController::EmulatedController(NpadIdType npad_id_type_) : npad_id_type(npad_id_type_) {}
 
 EmulatedController::~EmulatedController() = default;
+
+namespace {
+
+constexpr f32 MaxStoredGyroBias = 0.05f;
+
+std::mutex& GyroBiasStoreMutex() {
+    static std::mutex mutex;
+    return mutex;
+}
+
+std::filesystem::path GyroBiasStorePath() {
+    return Common::FS::GetEdenPath(Common::FS::EdenPath::ConfigDir) / "gyro_calibration.txt";
+}
+
+std::optional<Common::Vec<f32, 3>> LoadGyroBias(const std::string& key) {
+    std::scoped_lock lock{GyroBiasStoreMutex()};
+    std::ifstream file{GyroBiasStorePath()};
+    std::string line;
+    while (std::getline(file, line)) {
+        const auto separator = line.find('\t');
+        if (separator != key.size() || line.compare(0, separator, key) != 0) {
+            continue;
+        }
+        std::array<f32, 3> values{};
+        const char* cursor = line.data() + separator + 1;
+        const char* const end = line.data() + line.size();
+        bool is_valid = true;
+        for (auto& value : values) {
+            while (cursor < end && *cursor == ' ') {
+                ++cursor;
+            }
+            const auto result = std::from_chars(cursor, end, value);
+            if (result.ec != std::errc{} || !std::isfinite(value) ||
+                std::abs(value) > MaxStoredGyroBias) {
+                is_valid = false;
+                break;
+            }
+            cursor = result.ptr;
+        }
+        if (is_valid) {
+            return Common::Vec<f32, 3>{values[0], values[1], values[2]};
+        }
+    }
+    return std::nullopt;
+}
+
+void SaveGyroBias(const std::string& key, const Common::Vec<f32, 3>& bias) {
+    if (key.empty() || !std::isfinite(bias[0]) || !std::isfinite(bias[1]) ||
+        !std::isfinite(bias[2]) || std::abs(bias[0]) > MaxStoredGyroBias ||
+        std::abs(bias[1]) > MaxStoredGyroBias || std::abs(bias[2]) > MaxStoredGyroBias) {
+        return;
+    }
+    std::scoped_lock lock{GyroBiasStoreMutex()};
+    const auto path = GyroBiasStorePath();
+    std::vector<std::string> lines;
+    {
+        std::ifstream file{path};
+        std::string line;
+        while (std::getline(file, line)) {
+            const auto separator = line.find('\t');
+            if (line.empty() ||
+                (separator == key.size() && line.compare(0, separator, key) == 0)) {
+                continue;
+            }
+            lines.push_back(line);
+        }
+    }
+    lines.push_back(fmt::format("{}\t{} {} {}", key, bias[0], bias[1], bias[2]));
+    std::ofstream file{path, std::ios::trunc};
+    for (const auto& line : lines) {
+        file << line << '\n';
+    }
+}
+
+}
 
 NpadStyleIndex EmulatedController::MapSettingsTypeToNPad(Settings::ControllerType type) {
     switch (type) {
@@ -416,18 +498,33 @@ void EmulatedController::ReloadInput() {
                 },
         });
 
+        const std::string motion_param = motion_params[index].Serialize();
+        bool is_sensor{};
         {
             std::scoped_lock lock{motion_calibration_mutex};
             motion_is_sensor[index] = motion_params[index].Has("motion") &&
                                       motion_params[index].Get("engine", "") != "mouse";
+            is_sensor = motion_is_sensor[index];
+            motion_bias_keys[index] = is_sensor ? motion_param : std::string{};
         }
         motion_last_sample_time[index].store(0, std::memory_order_relaxed);
 
         // Restore motion state
         auto& emulated_motion = controller.motion_values[index].emulated;
         auto& motion = controller.motion_state[index];
-        emulated_motion.ResetRotations();
-        emulated_motion.ResetQuaternion();
+        if (motion_param != loaded_motion_params[index]) {
+            loaded_motion_params[index] = motion_param;
+            emulated_motion.ResetRotations();
+            emulated_motion.ResetQuaternion();
+            if (is_sensor) {
+                emulated_motion.SetGyroBias(
+                    LoadGyroBias(motion_param).value_or(Common::Vec<f32, 3>{}));
+            }
+            std::scoped_lock sample_lock{motion_sample_mutex};
+            motion_sample_head[index] = 0;
+            motion_sample_count[index] = 0;
+            motion_sample_last_push[index] = 0;
+        }
         motion.accel = emulated_motion.GetAcceleration();
         motion.gyro = emulated_motion.GetGyroscope();
         motion.rotation = emulated_motion.GetRotations();
@@ -536,6 +633,17 @@ void EmulatedController::ReloadInput() {
 
 void EmulatedController::UnloadInput() {
     is_initialized = false;
+    for (std::size_t index = 0; index < controller.motion_values.size(); ++index) {
+        const auto& emulated_motion = controller.motion_values[index].emulated;
+        std::string bias_key;
+        {
+            std::scoped_lock lock{motion_calibration_mutex};
+            bias_key = motion_bias_keys[index];
+        }
+        if (emulated_motion.HasLearnedGyroBias()) {
+            SaveGyroBias(bias_key, emulated_motion.GetGyroBias());
+        }
+    }
     for (auto& button : button_devices) {
         button.reset();
     }
@@ -1130,8 +1238,10 @@ void EmulatedController::SetMotion(const Common::Input::CallbackStatus& callback
             std::chrono::steady_clock::now().time_since_epoch())
             .count(),
         std::memory_order_relaxed);
+    bool is_sensor{};
     {
         std::scoped_lock lock{motion_calibration_mutex};
+        is_sensor = motion_is_sensor[index];
         if (motion_calibration_cancelled[index]) {
             motion_calibration_cancelled[index] = false;
             emulated.CancelCalibration();
@@ -1155,16 +1265,29 @@ void EmulatedController::SetMotion(const Common::Input::CallbackStatus& callback
     });
     if (emulated.IsCalibrating()) {
         emulated.UpdateCalibration(raw_status.delta_timestamp);
-        std::scoped_lock lock{motion_calibration_mutex};
-        if (motion_calibration_active[index] && !motion_calibration_requested[index]) {
-            motion_calibration_status[index] = {emulated.GetCalibrationState(),
-                                                emulated.GetCalibrationProgress()};
+        std::string bias_key;
+        {
+            std::scoped_lock lock{motion_calibration_mutex};
+            if (motion_calibration_active[index] && !motion_calibration_requested[index]) {
+                motion_calibration_status[index] = {emulated.GetCalibrationState(),
+                                                    emulated.GetCalibrationProgress()};
+            }
+            if (emulated.GetCalibrationState() == MotionCalibrationState::Done) {
+                bias_key = motion_bias_keys[index];
+            }
+        }
+        if (!bias_key.empty()) {
+            SaveGyroBias(bias_key, emulated.GetGyroBias());
         }
     }
     emulated.SetUserGyroThreshold(raw_status.gyro.x.properties.threshold);
     emulated.UpdateRotation(raw_status.delta_timestamp);
     emulated.UpdateOrientation(raw_status.delta_timestamp);
 
+    const s64 sample_time = std::chrono::duration_cast<std::chrono::microseconds>(
+                                std::chrono::steady_clock::now().time_since_epoch())
+                                .count();
+    std::scoped_lock sample_lock{motion_sample_mutex};
     auto& motion = controller.motion_state[index];
     motion.accel = emulated.GetAcceleration();
     motion.gyro = emulated.GetGyroscope();
@@ -1172,6 +1295,23 @@ void EmulatedController::SetMotion(const Common::Input::CallbackStatus& callback
     motion.euler = emulated.GetEulerAngles();
     motion.orientation = emulated.GetOrientation();
     motion.is_at_rest = !emulated.IsMoving(motion_sensitivity);
+
+    if (!is_sensor) {
+        return;
+    }
+    auto& queue = motion_sample_queue[index];
+    auto& head = motion_sample_head[index];
+    auto& count = motion_sample_count[index];
+    queue[(head + count) % MotionSampleCapacity] = {
+        .sample = {.motion = motion, .delta_timestamp = raw_status.delta_timestamp},
+        .time = sample_time,
+    };
+    if (count < MotionSampleCapacity) {
+        ++count;
+    } else {
+        head = (head + 1) % MotionSampleCapacity;
+    }
+    motion_sample_last_push[index] = sample_time;
 }
 
 void EmulatedController::SetColors(const Common::Input::CallbackStatus& callback,
@@ -1985,7 +2125,45 @@ NpadGcTriggerState EmulatedController::GetTriggers() const {
 }
 
 MotionState EmulatedController::GetMotions() const {
+    std::scoped_lock lock{motion_sample_mutex};
     return controller.motion_state;
+}
+
+std::size_t EmulatedController::PopMotionSamples(std::size_t index,
+                                                 std::span<ControllerMotionSample> samples) {
+    if (index >= motion_sample_queue.size()) {
+        return 0;
+    }
+    const s64 now = std::chrono::duration_cast<std::chrono::microseconds>(
+                        std::chrono::steady_clock::now().time_since_epoch())
+                        .count();
+    std::scoped_lock lock{motion_sample_mutex};
+    const auto& queue = motion_sample_queue[index];
+    auto& head = motion_sample_head[index];
+    auto& count = motion_sample_count[index];
+    while (count > 0 && now - queue[head].time > MotionSampleMaxAge) {
+        head = (head + 1) % MotionSampleCapacity;
+        --count;
+    }
+    std::size_t popped = 0;
+    while (count > 0 && popped < samples.size()) {
+        samples[popped++] = queue[head].sample;
+        head = (head + 1) % MotionSampleCapacity;
+        --count;
+    }
+    return popped;
+}
+
+bool EmulatedController::HasMotionSamples(std::size_t index) const {
+    if (index >= motion_sample_last_push.size()) {
+        return false;
+    }
+    const s64 now = std::chrono::duration_cast<std::chrono::microseconds>(
+                        std::chrono::steady_clock::now().time_since_epoch())
+                        .count();
+    std::scoped_lock lock{motion_sample_mutex};
+    return motion_sample_last_push[index] != 0 &&
+           now - motion_sample_last_push[index] < MotionSampleStreamTimeout;
 }
 
 ControllerColors EmulatedController::GetColors() const {

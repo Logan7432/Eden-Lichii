@@ -480,7 +480,7 @@ void Joycons::OnMotionUpdate(std::size_t port, Joycon::ControllerType type, int 
         .accel_x = value.accel_x,
         .accel_y = value.accel_y,
         .accel_z = value.accel_z,
-        .delta_timestamp = 15000,
+        .delta_timestamp = value.delta_timestamp,
     };
     SetMotion(identifier, id, motion_data);
 }

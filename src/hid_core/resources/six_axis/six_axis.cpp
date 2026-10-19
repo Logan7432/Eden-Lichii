@@ -4,6 +4,8 @@
 // SPDX-FileCopyrightText: Copyright 2023 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#include <optional>
+
 #include "common/common_types.h"
 #include "common/settings.h"
 #include "core/core_timing.h"
@@ -32,6 +34,26 @@ void SixAxis::OnRelease() {}
 
 void SixAxis::OnUpdate(const Core::Timing::CoreTiming& core_timing) {
     std::scoped_lock shared_lock{*shared_mutex};
+
+    constexpr std::size_t MaxMotionSamplesPerUpdate = 4;
+    struct MotionSampleBatch {
+        std::array<std::array<Core::HID::ControllerMotionSample, MaxMotionSamplesPerUpdate>, 2>
+            samples{};
+        std::array<std::size_t, 2> count{};
+        std::array<bool, 2> is_streaming{};
+    };
+    std::array<MotionSampleBatch, NPAD_COUNT> motion_batches{};
+    for (std::size_t i = 0; i < controller_data.size(); ++i) {
+        auto& batch = motion_batches[i];
+        auto& device = controller_data[i].device;
+        if (device == nullptr) {
+            continue;
+        }
+        for (std::size_t index = 0; index < batch.samples.size(); ++index) {
+            batch.is_streaming[index] = device->HasMotionSamples(index);
+            batch.count[index] = device->PopMotionSamples(index, batch.samples[index]);
+        }
+    }
 
     for (std::size_t aruid_index = 0; aruid_index < AruidIndexMax; ++aruid_index) {
         const auto* data = applet_resource->GetAruidDataByIndex(aruid_index);
@@ -119,25 +141,38 @@ void SixAxis::OnUpdate(const Core::Timing::CoreTiming& core_timing) {
                 state.orientation = hid_state.orientation;
             };
 
+            std::optional<std::size_t> fullkey_motion_index;
+            std::optional<std::size_t> handheld_motion_index;
+            std::optional<std::size_t> dual_left_motion_index;
+            std::optional<std::size_t> dual_right_motion_index;
+            std::optional<std::size_t> left_motion_index;
+            std::optional<std::size_t> right_motion_index;
+
             switch (controller_type) {
             case Core::HID::NpadStyleIndex::None:
                 ASSERT(false);
                 break;
             case Core::HID::NpadStyleIndex::Fullkey:
                 set_motion_state(sixaxis_fullkey_state, motion_state[0]);
+                fullkey_motion_index = 0;
                 break;
             case Core::HID::NpadStyleIndex::Handheld:
                 set_motion_state(sixaxis_handheld_state, motion_state[0]);
+                handheld_motion_index = 0;
                 break;
             case Core::HID::NpadStyleIndex::JoyconDual:
                 set_motion_state(sixaxis_dual_left_state, motion_state[0]);
                 set_motion_state(sixaxis_dual_right_state, motion_state[1]);
+                dual_left_motion_index = 0;
+                dual_right_motion_index = 1;
                 break;
             case Core::HID::NpadStyleIndex::JoyconLeft:
                 set_motion_state(sixaxis_left_lifo_state, motion_state[0]);
+                left_motion_index = 0;
                 break;
             case Core::HID::NpadStyleIndex::JoyconRight:
                 set_motion_state(sixaxis_right_lifo_state, motion_state[1]);
+                right_motion_index = 1;
                 break;
             case Core::HID::NpadStyleIndex::Pokeball:
                 using namespace std::literals::chrono_literals;
@@ -148,31 +183,43 @@ void SixAxis::OnUpdate(const Core::Timing::CoreTiming& core_timing) {
                 break;
             }
 
-            sixaxis_fullkey_state.sampling_number =
-                sixaxis_fullkey_lifo.lifo.ReadCurrentEntry().state.sampling_number + 1;
-            sixaxis_handheld_state.sampling_number =
-                sixaxis_handheld_lifo.lifo.ReadCurrentEntry().state.sampling_number + 1;
-            sixaxis_dual_left_state.sampling_number =
-                sixaxis_dual_left_lifo.lifo.ReadCurrentEntry().state.sampling_number + 1;
-            sixaxis_dual_right_state.sampling_number =
-                sixaxis_dual_right_lifo.lifo.ReadCurrentEntry().state.sampling_number + 1;
-            sixaxis_left_lifo_state.sampling_number =
-                sixaxis_left_lifo.lifo.ReadCurrentEntry().state.sampling_number + 1;
-            sixaxis_right_lifo_state.sampling_number =
-                sixaxis_right_lifo.lifo.ReadCurrentEntry().state.sampling_number + 1;
+            const auto& motion_batch = motion_batches[i];
+            const bool is_motion_active =
+                controller.sixaxis_sensor_enabled && Settings::values.motion_enabled.GetValue();
+            const auto write_lifo = [&](auto& lifo, Core::HID::SixAxisSensorState& state,
+                                        std::optional<std::size_t> motion_index) {
+                if (!motion_index || !is_motion_active ||
+                    !motion_batch.is_streaming[*motion_index]) {
+                    state.sampling_number = lifo.lifo.ReadCurrentEntry().state.sampling_number + 1;
+                    lifo.lifo.WriteNextEntry(state);
+                    return;
+                }
+                for (std::size_t s = 0; s < motion_batch.count[*motion_index]; ++s) {
+                    const auto& sample = motion_batch.samples[*motion_index][s];
+                    set_motion_state(state, sample.motion);
+                    using namespace std::literals::chrono_literals;
+                    const auto sample_delta =
+                        std::chrono::microseconds(static_cast<s64>(sample.delta_timestamp));
+                    state.delta_time = sample_delta <= 0us || sample_delta > 100ms
+                                           ? std::chrono::nanoseconds(5ms).count()
+                                           : std::chrono::nanoseconds(sample_delta).count();
+                    state.sampling_number = lifo.lifo.ReadCurrentEntry().state.sampling_number + 1;
+                    lifo.lifo.WriteNextEntry(state);
+                }
+            };
 
             if (IndexToNpadIdType(i) == Core::HID::NpadIdType::Handheld) {
                 // This buffer only is updated on handheld on HW
-                sixaxis_handheld_lifo.lifo.WriteNextEntry(sixaxis_handheld_state);
+                write_lifo(sixaxis_handheld_lifo, sixaxis_handheld_state, handheld_motion_index);
             } else {
                 // Handheld doesn't update this buffer on HW
-                sixaxis_fullkey_lifo.lifo.WriteNextEntry(sixaxis_fullkey_state);
+                write_lifo(sixaxis_fullkey_lifo, sixaxis_fullkey_state, fullkey_motion_index);
             }
 
-            sixaxis_dual_left_lifo.lifo.WriteNextEntry(sixaxis_dual_left_state);
-            sixaxis_dual_right_lifo.lifo.WriteNextEntry(sixaxis_dual_right_state);
-            sixaxis_left_lifo.lifo.WriteNextEntry(sixaxis_left_lifo_state);
-            sixaxis_right_lifo.lifo.WriteNextEntry(sixaxis_right_lifo_state);
+            write_lifo(sixaxis_dual_left_lifo, sixaxis_dual_left_state, dual_left_motion_index);
+            write_lifo(sixaxis_dual_right_lifo, sixaxis_dual_right_state, dual_right_motion_index);
+            write_lifo(sixaxis_left_lifo, sixaxis_left_lifo_state, left_motion_index);
+            write_lifo(sixaxis_right_lifo, sixaxis_right_lifo_state, right_motion_index);
         }
     }
 }
