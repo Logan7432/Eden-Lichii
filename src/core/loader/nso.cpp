@@ -891,6 +891,18 @@ constexpr std::array SwitchSportsResortBotOwnerWords{
     CodeWord{0x31ccec4, 0x97df004f, 0x97fda897},
 };
 
+constexpr std::array GalaxyThpPreloadWords{
+    CodeWord{0x8b8d4, 0xe59010c0, 0xe590c31c}, CodeWord{0x8b8d8, 0xe59030d4, 0xe35c0000},
+    CodeWord{0x8b8dc, 0xe0811003, 0xd12fff1e}, CodeWord{0x8b8e0, 0xe59020d0, 0xe59010c0},
+    CodeWord{0x8b8e4, 0xe58010c0, 0xe59030d4}, CodeWord{0x8b8e8, 0xe28010ec, 0xe0811003},
+    CodeWord{0x8b8ec, 0xe0822082, 0xe59020d0}, CodeWord{0x8b8f0, 0xe1a03001, 0xe58010c0},
+    CodeWord{0x8b8f4, 0xe7b32102, 0xe28010ec}, CodeWord{0x8b8f8, 0xe5922000, 0xe0822082},
+    CodeWord{0x8b8fc, 0xe58020d4, 0xe1a03001}, CodeWord{0x8b900, 0xe3a02001, 0xe7b32102},
+    CodeWord{0x8b904, 0xe5832008, 0xe5922000}, CodeWord{0x8b908, 0xe59020d0, 0xe58020d4},
+    CodeWord{0x8b90c, 0xe59030d8, 0xe3a02001}, CodeWord{0x8b910, 0xe0822082, 0xe5832008},
+    CodeWord{0x8b914, 0xe0811102, 0xe59020d8}, CodeWord{0x8b918, 0xe5813004, 0xe5832004},
+};
+
 constexpr std::array BuiltInCodeFixes{
     BuiltInCodeFix{
         .build_id = "3941550A42845731651BCD05EDBB47031FFCCA26",
@@ -1022,6 +1034,12 @@ constexpr std::array BuiltInCodeFixes{
         .words = SwitchSportsResortBotOwnerWords,
         .description =
             "Friend Lobby LAN matches CPU player owners by console address (Nintendo Switch Sports Resort)",
+    },
+    BuiltInCodeFix{
+        .build_id = "A638857E6DF584FF83B89111C7ABDF3A6F74C459",
+        .words = GalaxyThpPreloadWords,
+        .description =
+            "THP movie preload completion race (Super Mario Galaxy, Super Mario 3D All-Stars)",
     },
 };
 
