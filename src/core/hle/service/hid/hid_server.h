@@ -97,6 +97,10 @@ private:
     Result IsSixAxisSensorUnalteredPassthroughEnabled(Out<bool> out_is_enabled,
                                                       Core::HID::SixAxisSensorHandle sixaxis_handle,
                                                       ClientAppletResourceUserId aruid);
+    Result StoreSixAxisSensorCalibrationParameter(
+        InLargeData<Core::HID::SixAxisSensorCalibrationParameter, BufferAttr_HipcMapAlias>
+            calibration,
+        Core::HID::SixAxisSensorHandle sixaxis_handle, ClientAppletResourceUserId aruid);
     Result LoadSixAxisSensorCalibrationParameter(
         OutLargeData<Core::HID::SixAxisSensorCalibrationParameter, BufferAttr_HipcMapAlias>
             out_calibration,
@@ -214,6 +218,9 @@ private:
                                         InCopyHandle<Kernel::KTransferMemory> t_mem_1,
                                         InCopyHandle<Kernel::KTransferMemory> t_mem_2);
     Result FinalizeSevenSixAxisSensor(ClientAppletResourceUserId aruid);
+    Result EnableNpadImu(ClientAppletResourceUserId aruid, u64 t_mem_size,
+                         InCopyHandle<Kernel::KTransferMemory> t_mem);
+    Result DisableNpadImu(ClientAppletResourceUserId aruid);
     Result ResetSevenSixAxisSensorTimestamp(ClientAppletResourceUserId aruid);
     Result IsUsbFullKeyControllerEnabled(Out<bool> out_is_enabled,
                                          ClientAppletResourceUserId aruid);

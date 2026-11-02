@@ -88,7 +88,7 @@ IHidServer::IHidServer(Core::System& system_, std::shared_ptr<ResourceManager> r
         {83, C<&IHidServer::IsFirmwareUpdateAvailableForSixAxisSensor>, "IsFirmwareUpdateAvailableForSixAxisSensor"},
         {84, C<&IHidServer::EnableSixAxisSensorUnalteredPassthrough>, "EnableSixAxisSensorUnalteredPassthrough"},
         {85, C<&IHidServer::IsSixAxisSensorUnalteredPassthroughEnabled>, "IsSixAxisSensorUnalteredPassthroughEnabled"},
-        {86, &IHidServer::StubReplyZeroed, "StoreSixAxisSensorCalibrationParameter"},
+        {86, C<&IHidServer::StoreSixAxisSensorCalibrationParameter>, "StoreSixAxisSensorCalibrationParameter"},
         {87, C<&IHidServer::LoadSixAxisSensorCalibrationParameter>, "LoadSixAxisSensorCalibrationParameter"},
         {88, C<&IHidServer::GetSixAxisSensorIcInformation>, "GetSixAxisSensorIcInformation"},
         {89, C<&IHidServer::ResetIsSixAxisSensorDeviceNewlyAssigned>, "ResetIsSixAxisSensorDeviceNewlyAssigned"},
@@ -156,8 +156,8 @@ IHidServer::IHidServer(Core::System& system_, std::shared_ptr<ResourceManager> r
         {310, C<&IHidServer::ResetSevenSixAxisSensorTimestamp>, "ResetSevenSixAxisSensorTimestamp"},
         {311, &IHidServer::StubReplyZeroed, "Unknown311"},
         {312, &IHidServer::StubReplyZeroed, "Unknown312"},
-        {320, &IHidServer::StubReplyZeroed, "EnableNpadImu"}, //21.0.0+
-        {321, &IHidServer::StubReplyZeroed, "DisableNpadImu"}, //21.0.0+
+        {320, C<&IHidServer::EnableNpadImu>, "EnableNpadImu"}, //21.0.0+
+        {321, C<&IHidServer::DisableNpadImu>, "DisableNpadImu"}, //21.0.0+
         {322, &IHidServer::StubReplyZeroed, "Unknown322"},
         {323, &IHidServer::StubReplyZeroed, "Unknown323"},
         {324, &IHidServer::StubReplyZeroed, "Unknown324"},
@@ -631,6 +631,18 @@ Result IHidServer::IsSixAxisSensorUnalteredPassthroughEnabled(
 
     R_RETURN(GetResourceManager()->GetSixAxis()->IsSixAxisSensorUnalteredPassthroughEnabled(
         sixaxis_handle, *out_is_enabled));
+}
+
+Result IHidServer::StoreSixAxisSensorCalibrationParameter(
+    InLargeData<Core::HID::SixAxisSensorCalibrationParameter, BufferAttr_HipcMapAlias> calibration,
+    Core::HID::SixAxisSensorHandle sixaxis_handle, ClientAppletResourceUserId aruid) {
+    LOG_INFO(Service_HID,
+             "called, npad_type={}, npad_id={}, device_index={}, applet_resource_user_id={}",
+             sixaxis_handle.npad_type, sixaxis_handle.npad_id, sixaxis_handle.device_index,
+             aruid.pid);
+
+    R_RETURN(GetResourceManager()->GetSixAxis()->StoreSixAxisSensorCalibrationParameter(
+        sixaxis_handle, *calibration));
 }
 
 Result IHidServer::LoadSixAxisSensorCalibrationParameter(
@@ -1242,6 +1254,20 @@ Result IHidServer::InitializeSevenSixAxisSensor(ClientAppletResourceUserId aruid
 
     GetResourceManager()->GetSevenSixAxis()->SetTransferMemoryAddress(t_mem_1->GetSourceAddress(), t_mem_1->GetOwner());
 
+    R_SUCCEED();
+}
+
+Result IHidServer::EnableNpadImu(ClientAppletResourceUserId aruid, u64 t_mem_size,
+                                 InCopyHandle<Kernel::KTransferMemory> t_mem) {
+    LOG_INFO(Service_HID, "called, t_mem_size={:#x}, applet_resource_user_id={}", t_mem_size,
+             aruid.pid);
+    GetResourceManager()->GetNpadImu()->Enable(t_mem->GetSourceAddress(), t_mem->GetOwner());
+    R_SUCCEED();
+}
+
+Result IHidServer::DisableNpadImu(ClientAppletResourceUserId aruid) {
+    LOG_INFO(Service_HID, "called, applet_resource_user_id={}", aruid.pid);
+    GetResourceManager()->GetNpadImu()->Disable();
     R_SUCCEED();
 }
 

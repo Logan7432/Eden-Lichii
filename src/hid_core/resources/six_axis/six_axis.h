@@ -40,6 +40,9 @@ public:
         const Core::HID::SixAxisSensorHandle& sixaxis_handle, bool is_enabled);
     Result IsSixAxisSensorUnalteredPassthroughEnabled(
         const Core::HID::SixAxisSensorHandle& sixaxis_handle, bool& is_enabled) const;
+    Result StoreSixAxisSensorCalibrationParameter(
+        const Core::HID::SixAxisSensorHandle& sixaxis_handle,
+        const Core::HID::SixAxisSensorCalibrationParameter& calibration);
     Result LoadSixAxisSensorCalibrationParameter(
         const Core::HID::SixAxisSensorHandle& sixaxis_handle,
         Core::HID::SixAxisSensorCalibrationParameter& calibration) const;
@@ -66,6 +69,7 @@ private:
         bool unaltered_passthrough{false};
         Core::HID::SixAxisSensorFusionParameters fusion{};
         Core::HID::SixAxisSensorCalibrationParameter calibration{};
+        bool has_calibration{false};
         Core::HID::SixAxisSensorIcInformation ic_information{DefaultSixAxisSensorIcInformation()};
         Core::HID::GyroscopeZeroDriftMode gyroscope_zero_drift_mode{
             Core::HID::GyroscopeZeroDriftMode::Standard};
