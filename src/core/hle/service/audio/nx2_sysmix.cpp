@@ -106,7 +106,7 @@ struct SysmixOutput::Impl {
             std::chrono::duration_cast<std::chrono::microseconds>(
                 system.CoreTiming().GetGlobalTimeNs())
                 .count());
-        LOG_INFO(Service_Audio,
+        LOG_DEBUG(Service_Audio,
                  "sysmix stream {} output: copied={} accepted={} nonzero={} blocks={} full={} "
                  "queued={} retried={} padded={} deferred={} filled={} emu_us={}",
                  id, counters.copied_frames, counters.accepted_frames, counters.nonzero_frames,
@@ -398,7 +398,7 @@ void SysmixOutput::Pump() {
         }
         p.Notify(filled);
         if (p.counters.admitted_blocks <= 3 || p.counters.ticks % 400 == 0) {
-            LOG_INFO(Service_Audio, "sysmix input {}: captured={} nonzero={} filled={}", p.id,
+            LOG_DEBUG(Service_Audio, "sysmix input {}: captured={} nonzero={} filled={}", p.id,
                      p.counters.accepted_frames, p.counters.nonzero_frames, filled);
         }
         return;
@@ -458,7 +458,7 @@ void SysmixOutput::Pump() {
         ++p.counters.backpressure;
         p.counters.retried_frames += taken;
         if (p.counters.backpressure <= 3) {
-            LOG_INFO(Service_Audio, "sysmix stream {} host full: accepted={} blocks={}", p.id,
+            LOG_DEBUG(Service_Audio, "sysmix stream {} host full: accepted={} blocks={}", p.id,
                      p.counters.accepted_frames, p.counters.admitted_blocks);
         }
         if (p.counters.ticks % 400 == 0) {

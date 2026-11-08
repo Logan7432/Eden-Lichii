@@ -1245,7 +1245,7 @@ bool TextureCache<P>::BlitImage(const Tegra::Engines::Fermi2D::Surface& dst,
     if (True(dst_image.flags & ImageFlagBits::Unbacked)) {
         static u32 logged{};
         if (logged++ < 64) {
-            LOG_INFO(HW_GPU, "2D blit into unbacked image {:#x}: dst {:#x} {}x{} from {:#x} {}x{}",
+            LOG_DEBUG(HW_GPU, "2D blit into unbacked image {:#x}: dst {:#x} {}x{} from {:#x} {}x{}",
                      dst_image.gpu_addr, dst.Address(), dst.width, dst.height, src.Address(),
                      src.width, src.height);
         }
@@ -3201,7 +3201,7 @@ ImageId TextureCache<P>::FindDMAImage(const ImageInfo& info, GPUVAddr gpu_addr) 
             if (True(existing_image.flags & ImageFlagBits::Unbacked)) {
                 static u32 logged{};
                 if (logged++ < 64) {
-                    LOG_INFO(HW_GPU, "DMA copy at {:#x} ({}x{}) into unbacked image {:#x}", gpu_addr,
+                    LOG_DEBUG(HW_GPU, "DMA copy at {:#x} ({}x{}) into unbacked image {:#x}", gpu_addr,
                              info.size.width, info.size.height, existing_image.gpu_addr);
                 }
             }
@@ -3347,7 +3347,7 @@ ImageViewId TextureCache<P>::FindRenderTargetView(const ImageInfo& info, GPUVAdd
     if (True(image.flags & ImageFlagBits::Unbacked)) {
         static u32 logged{};
         if (logged++ < 64) {
-            LOG_INFO(HW_GPU, "Render target in unbacked image {:#x} at {:#x}: {}x{} level {} layer {}",
+            LOG_DEBUG(HW_GPU, "Render target in unbacked image {:#x} at {:#x}: {}x{} level {} layer {}",
                      image.gpu_addr, gpu_addr, info.size.width, info.size.height, base.level, base.layer);
         }
     }
@@ -3536,7 +3536,7 @@ ImageViewId TextureCache<P>::FindOrEmplaceImageView(ImageId image_id, const Imag
     if (True(image.flags & ImageFlagBits::Unbacked) &&
         False(image.flags & ImageFlagBits::SparseLayers)) {
         // How the game uses an image too large to back (e.g. a sparse virtual texture).
-        LOG_INFO(HW_GPU, "View of unbacked image {:#x}: type {} format {} levels {}+{} layers {}+{}",
+        LOG_DEBUG(HW_GPU, "View of unbacked image {:#x}: type {} format {} levels {}+{} layers {}+{}",
                  image.gpu_addr, static_cast<u32>(info.type), static_cast<u32>(info.format),
                  info.range.base.level, info.range.extent.levels, info.range.base.layer,
                  info.range.extent.layers);
@@ -3833,7 +3833,7 @@ void TextureCache<P>::DeleteImage(ImageId image_id, bool immediate_delete) {
     const bool retained = RetainPendingImageDownloads(image_id, slot_images[image_id],
                                                        uncommitted_downloads, committed_downloads);
     if (retained) {
-        LOG_INFO(Render_Vulkan, "Retained image for queued download: id={}", image_id.Value());
+        LOG_DEBUG(Render_Vulkan, "Retained image for queued download: id={}", image_id.Value());
     } else if (!immediate_delete) {
         if constexpr (requires { runtime.CurrentTick(); }) {
             gpu_sentenced_images.push_back(

@@ -96,7 +96,7 @@ bool Puller::CanResumeAcquire(DmaPusher& dma_pusher) {
     if (Nx2SemaphoreWaiters::Get().Latched(this)) {
         if (static std::atomic<u32> rescued{};
             !pending_acquire->Matches(current) && rescued.fetch_add(1) < 64) {
-            LOG_INFO(HW_GPU, "Channel {} met semaphore {:#x} value {:#x} at its release (now {:#x})",
+            LOG_DEBUG(HW_GPU, "Channel {} met semaphore {:#x} value {:#x} at its release (now {:#x})",
                      dma_pusher.channel_state.bind_id, pending_acquire->address,
                      pending_acquire->value, current);
         }

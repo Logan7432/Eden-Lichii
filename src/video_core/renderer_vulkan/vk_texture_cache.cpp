@@ -3082,7 +3082,7 @@ Image::Image(TextureCacheRuntime& runtime_, const ImageInfo& info_, GPUVAddr gpu
                 static std::atomic<u32> uneven_images{0};
                 const u32 count = ++uneven_images;
                 if (count <= 4 || (count & (count - 1)) == 0) {
-                    LOG_INFO(Render_Vulkan,
+                    LOG_DEBUG(Render_Vulkan,
                              "ASTC {}x{}x{} with {} levels kept as RGBA8 (uneven BC block mips), "
                              "{} images so far",
                              info.size.width, info.size.height, info.resources.layers,

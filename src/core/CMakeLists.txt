@@ -1321,4 +1321,9 @@ if (ENABLE_LTO AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang" AND NOT MSVC)
     set_source_files_properties(hle/kernel/kernel.cpp PROPERTIES COMPILE_OPTIONS -fno-lto)
 endif()
 
+option(ENABLE_NX2_DEBUG_SERVER "Let EDEN_NX2_DEBUG_SERVER start the Switch 2 debug server" OFF)
+if (ENABLE_NX2_DEBUG_SERVER)
+    target_compile_definitions(core PRIVATE ENABLE_NX2_DEBUG_SERVER)
+endif()
+
 create_target_directory_groups(core)

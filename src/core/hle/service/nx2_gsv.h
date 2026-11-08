@@ -776,7 +776,7 @@ private:
             if (count != 0 && (m_tile_requests == count ||
                                now - m_tile_log_time >= std::chrono::seconds{30})) {
                 m_tile_log_time = now;
-                LOG_INFO(Service, "nx2:gpu 216: {} calls, {} maps, {} unmaps; {} MiB of sparse tiles "
+                LOG_DEBUG(Service, "nx2:gpu 216: {} calls, {} maps, {} unmaps; {} MiB of sparse tiles "
                                   "and {} MiB in GPU-only regions mapped, {} maps into regions that "
                                   "keep their own memory left out; {} MiB of sparse blocks backed, {} "
                                   "MiB released",
@@ -1037,7 +1037,7 @@ private:
                     Tegra::Nx2SparseBlockWritten(start, block);
                     m_sparse_backed_bytes += block_size;
                     if (++m_sparse_blocks == 1 || (m_sparse_blocks % 64) == 0) {
-                        LOG_INFO(Service, "nx2:gpu {} sparse blocks backed ({} MiB); {} MiB of GPU-only "
+                        LOG_DEBUG(Service, "nx2:gpu {} sparse blocks backed ({} MiB); {} MiB of GPU-only "
                                           "memory in use, peak {} MiB",
                                  m_sparse_blocks, m_sparse_backed_bytes >> 20, m_gpu_only_bytes >> 20,
                                  m_gpu_only_peak >> 20);
@@ -1810,7 +1810,7 @@ private:
                 present_ns, std::memory_order_relaxed);
         }
         if (m_presents <= 4 || (m_presents % 600) == 0) {
-            LOG_INFO(Service, "nx2:vi2 229 present #{} token={:#x} slot={} image={}", m_presents,
+            LOG_DEBUG(Service, "nx2:vi2 229 present #{} token={:#x} slot={} image={}", m_presents,
                      u64{w[2]} | (u64{w[3]} << 32), w[4], w[5]);
         }
         // Wait for this frame's fence, so the game doesn't write the next frame's data (constant
@@ -1918,7 +1918,7 @@ private:
             }
             m_stats.last_present = entered;
             if (++m_stats.presents == 600) {
-                LOG_INFO(Service,
+                LOG_DEBUG(Service,
                          "nx2:vi2 last 600 presents: frame {} us (max {}, {} over 100 ms), "
                          "blocked on the GPU fence {} us (max {}), composite {} us, vblank "
                          "pacing {} us, {} ran a frame ahead",
@@ -2115,7 +2115,7 @@ private:
                         m_presents, fence_id, fence_value, syncpoints.GetGuestSyncpointValue(fence_id));
         }
         if (m_presents <= 8 || (m_presents % 600) == 0) {
-            LOG_INFO(Service, "nx2:vi2 present #{} fence ({}, {}) now {}, waited {} us",
+            LOG_DEBUG(Service, "nx2:vi2 present #{} fence ({}, {}) now {}, waited {} us",
                      m_presents, fence_id, fence_value, syncpoints.GetGuestSyncpointValue(fence_id),
                      std::chrono::duration_cast<std::chrono::microseconds>(
                          std::chrono::steady_clock::now() - start)
@@ -2704,7 +2704,7 @@ private:
     void Log(HLERequestContext& ctx, std::string_view what) {
         const auto* w = ctx.CommandBuffer();
         if (Nx2FirstVideoCommand(GetServiceName(), ctx.GetCommand())) {
-            LOG_INFO(Service, "{} TIPC {} {} (first use): words {:08x}", GetServiceName(),
+            LOG_DEBUG(Service, "{} TIPC {} {} (first use): words {:08x}", GetServiceName(),
                      ctx.GetCommand(), what, fmt::join(std::span<const u32>{w, 12}, " "));
         } else if (Nx2VideoTraceEnabled()) {
             // EDEN_NX2_VDEC_TRACE=1: every video decoder call at Info level.
@@ -3149,7 +3149,7 @@ private:
                     const s64 behind_us =
                         (written_us - m_stream_start->first) -
                         (static_cast<s64>(frame.pts) - static_cast<s64>(m_stream_start->second));
-                    LOG_INFO(Service,
+                    LOG_DEBUG(Service,
                              "{} frame {} ({}x{}, pts {} us{}) in image {}, {} late dropped, "
                              "{} ms behind",
                              GetServiceName(), m_frames_out, width, height, frame.pts,

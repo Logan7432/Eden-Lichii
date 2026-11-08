@@ -933,7 +933,7 @@ void Maxwell3D::ProcessCBBind(size_t stage_index) {
     static std::array<std::array<bool, 32>, 5> seen{};
     if (!seen[stage_index][bind_data.shader_slot]) {
         seen[stage_index][bind_data.shader_slot] = true;
-        LOG_INFO(HW_GPU, "Constant buffer bind: stage {} slot {} address {:#x} size {:#x}", stage_index,
+        LOG_DEBUG(HW_GPU, "Constant buffer bind: stage {} slot {} address {:#x} size {:#x}", stage_index,
                  bind_data.shader_slot.Value(), regs.const_buffer.Address(), regs.const_buffer.size);
     }
     if (bind_data.shader_slot >= Regs::MaxConstBuffers) {

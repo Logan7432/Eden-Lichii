@@ -130,7 +130,7 @@ void BufferCache<P>::TickFrame() {
         }
         std::partial_sort(largest.begin(), largest.begin() + std::min<size_t>(6, largest.size()),
                           largest.end(), std::greater<>{});
-        LOG_INFO(HW_GPU, "Buffer cache: {} buffers {} MiB; largest {}", count, total >> 20,
+        LOG_DEBUG(HW_GPU, "Buffer cache: {} buffers {} MiB; largest {}", count, total >> 20,
                  fmt::join(largest.begin(), largest.begin() + std::min<size_t>(6, largest.size()), ", "));
     }
 
@@ -2143,7 +2143,7 @@ void BufferCache<P>::Nx2NoteListWrite(BufferId buffer_id, DAddr device_addr, u64
                     ++entry.writes;
                     if (!nx2_collect_list_copies && !entry.draw_written) {
                         entry.draw_written = true;
-                        LOG_INFO(HW_GPU, "Command list page {:#x} is written by draws too: its "
+                        LOG_DEBUG(HW_GPU, "Command list page {:#x} is written by draws too: its "
                                          "lists wait for the work before the last host sync",
                                  page_addr);
                     }

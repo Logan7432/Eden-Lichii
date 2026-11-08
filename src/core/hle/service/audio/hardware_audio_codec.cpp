@@ -586,7 +586,7 @@ Result IHardwareAudioCodecManagerSession::Execute(InBuffer<BufferAttr_HipcAutoSe
     }
     if (p.logged_batches < 3) {
         ++p.logged_batches;
-        LOG_INFO(Service_Audio, "hwacod completed tag={} tasks={} decoded={} errors={} pcm_bytes={} producer={}",
+        LOG_DEBUG(Service_Audio, "hwacod completed tag={} tasks={} decoded={} errors={} pcm_bytes={} producer={}",
                  p.tag, tasks.size(), successful, failed, output_total, p.batch.State().write_index);
     }
     R_SUCCEED();

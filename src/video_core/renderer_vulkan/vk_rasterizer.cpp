@@ -519,7 +519,7 @@ bool RasterizerVulkan::TryNx2IndirectReset(bool is_indexed, u32 instance_count) 
     }
     static u32 reported{};
     if (reported++ < 5) {
-        LOG_INFO(HW_GPU, "Experimental indirect reset: {} records", count);
+        LOG_DEBUG(HW_GPU, "Experimental indirect reset: {} records", count);
     }
     gpu.TickWork();
     return true;
@@ -590,7 +590,7 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
                 max_groups = std::max(max_groups, count);
             }
             if (draws == 1 || draws % 5000 == 0) {
-                LOG_WARNING(Render_Vulkan,
+                LOG_DEBUG(Render_Vulkan,
                             "Mesh emulation survey: {} mesh draws dropped, {} indirect, {} groups "
                             "in direct ones (max {} per draw), frame {}",
                             draws, indirect, groups, max_groups, render_trace_frame);
@@ -652,7 +652,7 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
             total_groups += groups;
             frame_drawn |= groups != 0;
             if (draws % 2000 == 0) {
-                LOG_INFO(Render_Vulkan,
+                LOG_DEBUG(Render_Vulkan,
                          "Mesh emulation draws: {} ({} with no groups), {} groups; frames with "
                          "emulated draws: {} of {}",
                          draws, empty, total_groups, frames_drawn, frames);

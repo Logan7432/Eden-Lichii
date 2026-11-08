@@ -520,7 +520,9 @@ struct System::Impl {
             game_info.version = title_version;
             room_member->SendGameInfo(game_info);
         }
+#ifdef ENABLE_NX2_DEBUG_SERVER
         debug_service = Nx2Debug::MaybeStartService(system, name, params.program_id);
+#endif
         Nx2Sampler::StartFromEnvironment();
         return SystemResultStatus::Success;
     }

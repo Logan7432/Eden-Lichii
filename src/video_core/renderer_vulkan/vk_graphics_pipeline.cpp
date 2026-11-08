@@ -473,7 +473,7 @@ GraphicsPipeline::GraphicsPipeline(
             static std::atomic<u32> logged{};
             if (elapsed > std::chrono::milliseconds{100} ||
                 (elapsed > std::chrono::milliseconds{2} && logged.fetch_add(1) < 400)) {
-                LOG_INFO(Render_Vulkan,
+                LOG_DEBUG(Render_Vulkan,
                          "Nx2Perf async_pipelines: {:016x} worker emission and driver build {:.1f} ms",
                          key.Hash(), std::chrono::duration<double, std::milli>(elapsed).count());
             }

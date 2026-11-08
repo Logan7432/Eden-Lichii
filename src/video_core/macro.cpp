@@ -1404,7 +1404,7 @@ void MacroEngine::Execute(Core::System& system, Engines::Maxwell3D& maxwell3d, u
                     static u64 enable_writes{};
                     ++modes[value & 3];
                     if (++enable_writes % 20000 == 0) {
-                        LOG_INFO(HW_GPU, "Native MME render enable modes: use {} always {} never {} other {}",
+                        LOG_DEBUG(HW_GPU, "Native MME render enable modes: use {} always {} never {} other {}",
                                  modes[0], modes[1], modes[2], modes[3]);
                     }
                 }
@@ -1453,7 +1453,7 @@ void MacroEngine::Execute(Core::System& system, Engines::Maxwell3D& maxwell3d, u
                         memory.FlushRegion(source, read_bytes, VideoCommon::CacheType::BufferCache);
                         static u64 flushes{};
                         if (++flushes % 2000 == 1) {
-                            LOG_INFO(HW_GPU, "Native MME DMA read flushed GPU-written memory ({} times)", flushes);
+                            LOG_DEBUG(HW_GPU, "Native MME DMA read flushed GPU-written memory ({} times)", flushes);
                         }
                     }
                     static u32 dma_logs{};
@@ -1461,7 +1461,7 @@ void MacroEngine::Execute(Core::System& system, Engines::Maxwell3D& maxwell3d, u
                         ++dma_logs;
                         std::array<u32, 8> words{};
                         for (u32 i = 0; i < std::min<u32>(value, 8); ++i) words[i] = memory.Read<u32>(source + u64{i} * 4);
-                        LOG_INFO(HW_GPU, "Native MME DMA read{} start={:#x} source={:#x} count={} words={:08x}",
+                        LOG_DEBUG(HW_GPU, "Native MME DMA read{} start={:#x} source={:#x} count={} words={:08x}",
                                  address == DmaReadFifoed ? " fifoed" : "", method, source, value, fmt::join(words, ","));
                     }
                     const u32 word_count = std::min<u32>(value, 0x1000);

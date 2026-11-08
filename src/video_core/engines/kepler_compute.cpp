@@ -105,7 +105,7 @@ void KeplerCompute::ProcessNativeReportSemaphore(u32 argument) {
     const bool one_word = (argument >> 28) & 1;
     static u32 logged{};
     if (logged++ < 32) {
-        LOG_INFO(HW_GPU, "Native compute report semaphore {:#x} = {:#x}, control {:#x}", address,
+        LOG_DEBUG(HW_GPU, "Native compute report semaphore {:#x} = {:#x}, control {:#x}", address,
                  payload, argument);
     }
     if (operation != 0 && operation != 2) {
@@ -350,7 +350,7 @@ bool KeplerCompute::ProcessNativeMethod(Core::System& system, u32 method, u32 ar
                 memory_manager.ReadBlockUnsafe(address, descriptor.data(), sizeof(descriptor));
                 if (static u32 logged{}; (descriptor[53] & (1U << 23)) && logged < 8) {
                     ++logged;
-                    LOG_INFO(HW_GPU, "Native QMD {:#x} releases: {:08x} | {:08x} | {:08x}", address,
+                    LOG_DEBUG(HW_GPU, "Native QMD {:#x} releases: {:08x} | {:08x} | {:08x}", address,
                              fmt::join(std::span{descriptor}.subspan(24, 4), ","),
                              fmt::join(std::span{descriptor}.subspan(28, 4), ","),
                              fmt::join(std::span{descriptor}.subspan(52, 4), ","));

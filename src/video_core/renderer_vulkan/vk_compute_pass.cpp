@@ -833,7 +833,7 @@ void ASTCDecoderPass::AssembleInto(const VideoCommon::ImageInfo& info, u32 skip,
     ++decodes;
     waited += end - start;
     if (end - window_start >= std::chrono::seconds{5}) {
-        LOG_INFO(Render_Vulkan, "ASTC GPU decodes: {} in {} ms, {} ms waiting ({})", decodes,
+        LOG_DEBUG(Render_Vulkan, "ASTC GPU decodes: {} in {} ms, {} ms waiting ({})", decodes,
                  std::chrono::duration_cast<std::chrono::milliseconds>(end - window_start).count(),
                  std::chrono::duration_cast<std::chrono::milliseconds>(waited).count(),
                  flush_only ? "flush" : "finish");

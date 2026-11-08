@@ -124,7 +124,7 @@ ImageInfo::ImageInfo(const TICEntry& config) noexcept {
         static std::vector<std::array<u64, 4>> logged;
         if (logged.size() < 16 && std::find(logged.begin(), logged.end(), config.raw) == logged.end()) {
             logged.push_back(config.raw);
-            LOG_INFO(HW_GPU, "3D TIC {:016x} {:016x} {:016x} {:016x}: {}x{}x{} block_depth {} levels {}",
+            LOG_DEBUG(HW_GPU, "3D TIC {:016x} {:016x} {:016x} {:016x}: {}x{}x{} block_depth {} levels {}",
                      config.raw[0], config.raw[1], config.raw[2], config.raw[3], size.width, size.height,
                      size.depth, config.block_depth.Value(), config.max_mip_level.Value() + 1);
         }

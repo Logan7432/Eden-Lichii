@@ -1820,7 +1820,7 @@ GraphicsPipeline* PipelineCache::BuiltPipeline(GraphicsPipeline* pipeline) noexc
         static std::atomic<u64> skipped{};
         if ((skipped.fetch_add(1, std::memory_order_relaxed) & 255) == 0) {
             // Counts lookups, not draws: a draw state can look its pipeline up more than once.
-            LOG_INFO(Render_Vulkan,
+            LOG_DEBUG(Render_Vulkan,
                      "Async shaders: {} pipeline lookups skipped for unbuilt pipelines",
                      skipped.load(std::memory_order_relaxed));
         }
@@ -2235,14 +2235,14 @@ void ReportRuntimePipeline(const char* kind, std::chrono::steady_clock::time_poi
     if (elapsed > std::chrono::milliseconds{100} ||
         (elapsed > std::chrono::milliseconds{2} && logged < 400)) {
         ++logged;
-        LOG_INFO(Render_Vulkan, "{} pipeline built on the GPU thread in {:.1f} ms: {}", kind,
+        LOG_DEBUG(Render_Vulkan, "{} pipeline built on the GPU thread in {:.1f} ms: {}", kind,
                  ms(elapsed), shaders);
     }
     if (now - window > std::chrono::seconds{10}) {
         const auto take = [](auto& counter) {
             return std::chrono::nanoseconds{counter.exchange(0, std::memory_order::relaxed)};
         };
-        LOG_INFO(Render_Vulkan,
+        LOG_DEBUG(Render_Vulkan,
                  "Runtime pipelines in the last 10 s: {} built, {:.1f} ms on the GPU thread "
                  "({:.1f} ms of it graphics SPIR-V), {:.1f} ms graphics SPIR-V on workers, "
                  "{:.1f} ms of draws held for unbuilt pipelines",
