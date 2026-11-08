@@ -521,8 +521,9 @@ void EmulatedController::ReloadInput() {
                     LoadGyroBias(motion_param).value_or(Common::Vec<f32, 3>{}));
             }
             std::scoped_lock sample_lock{motion_sample_mutex};
-            motion_sample_head[index] = 0;
-            motion_sample_count[index] = 0;
+            for (auto& read : motion_sample_read) {
+                read[index] = motion_sample_written[index];
+            }
             motion_sample_last_push[index] = 0;
         }
         motion.accel = emulated_motion.GetAcceleration();
@@ -1299,18 +1300,12 @@ void EmulatedController::SetMotion(const Common::Input::CallbackStatus& callback
     if (!is_sensor) {
         return;
     }
-    auto& queue = motion_sample_queue[index];
-    auto& head = motion_sample_head[index];
-    auto& count = motion_sample_count[index];
-    queue[(head + count) % MotionSampleCapacity] = {
+    auto& written = motion_sample_written[index];
+    motion_sample_queue[index][written % MotionSampleCapacity] = {
         .sample = {.motion = motion, .delta_timestamp = raw_status.delta_timestamp},
         .time = sample_time,
     };
-    if (count < MotionSampleCapacity) {
-        ++count;
-    } else {
-        head = (head + 1) % MotionSampleCapacity;
-    }
+    ++written;
     motion_sample_last_push[index] = sample_time;
 }
 
@@ -2130,7 +2125,8 @@ MotionState EmulatedController::GetMotions() const {
 }
 
 std::size_t EmulatedController::PopMotionSamples(std::size_t index,
-                                                 std::span<ControllerMotionSample> samples) {
+                                                 std::span<ControllerMotionSample> samples,
+                                                 MotionSampleReader reader, s64 max_age_us) {
     if (index >= motion_sample_queue.size()) {
         return 0;
     }
@@ -2139,19 +2135,37 @@ std::size_t EmulatedController::PopMotionSamples(std::size_t index,
                         .count();
     std::scoped_lock lock{motion_sample_mutex};
     const auto& queue = motion_sample_queue[index];
-    auto& head = motion_sample_head[index];
-    auto& count = motion_sample_count[index];
-    while (count > 0 && now - queue[head].time > MotionSampleMaxAge) {
-        head = (head + 1) % MotionSampleCapacity;
-        --count;
+    const u64 written = motion_sample_written[index];
+    auto& read = motion_sample_read[static_cast<std::size_t>(reader)][index];
+    if (written - read > MotionSampleCapacity) {
+        read = written - MotionSampleCapacity;
+    }
+    const s64 max_age = max_age_us > 0 ? max_age_us : MotionSampleMaxAge;
+    while (read < written && now - queue[read % MotionSampleCapacity].time > max_age) {
+        ++read;
     }
     std::size_t popped = 0;
-    while (count > 0 && popped < samples.size()) {
-        samples[popped++] = queue[head].sample;
-        head = (head + 1) % MotionSampleCapacity;
-        --count;
+    while (read < written && popped < samples.size()) {
+        samples[popped++] = queue[read % MotionSampleCapacity].sample;
+        ++read;
     }
     return popped;
+}
+
+void EmulatedController::DiscardMotionSamples(MotionSampleReader reader) {
+    std::scoped_lock lock{motion_sample_mutex};
+    auto& read = motion_sample_read[static_cast<std::size_t>(reader)];
+    for (std::size_t index = 0; index < read.size(); ++index) {
+        read[index] = motion_sample_written[index];
+    }
+}
+
+bool EmulatedController::HasMotionSampleStream(std::size_t index) const {
+    if (index >= motion_sample_last_push.size()) {
+        return false;
+    }
+    std::scoped_lock lock{motion_sample_mutex};
+    return motion_sample_last_push[index] != 0;
 }
 
 bool EmulatedController::HasMotionSamples(std::size_t index) const {

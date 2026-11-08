@@ -139,6 +139,12 @@ struct ControllerMotionSample {
     u64 delta_timestamp{};
 };
 
+enum class MotionSampleReader : u8 {
+    SixAxis,
+    NpadImu,
+    Count,
+};
+
 enum EmulatedDeviceIndex : u8 {
     LeftIndex,
     RightIndex,
@@ -378,8 +384,12 @@ public:
     /// Returns the latest status of motion input from the mouse
     MotionState GetMotions() const;
 
-    std::size_t PopMotionSamples(std::size_t index, std::span<ControllerMotionSample> samples);
+    std::size_t PopMotionSamples(std::size_t index, std::span<ControllerMotionSample> samples,
+                                 MotionSampleReader reader = MotionSampleReader::SixAxis,
+                                 s64 max_age_us = 0);
+    void DiscardMotionSamples(MotionSampleReader reader);
     bool HasMotionSamples(std::size_t index) const;
+    bool HasMotionSampleStream(std::size_t index) const;
 
     /// Returns the latest color value from the controller
     ControllerColors GetColors() const;
@@ -690,8 +700,10 @@ private:
     std::array<std::array<QueuedMotionSample, MotionSampleCapacity>,
                Settings::NativeMotion::NumMotions>
         motion_sample_queue{};
-    std::array<std::size_t, Settings::NativeMotion::NumMotions> motion_sample_head{};
-    std::array<std::size_t, Settings::NativeMotion::NumMotions> motion_sample_count{};
+    std::array<u64, Settings::NativeMotion::NumMotions> motion_sample_written{};
+    std::array<std::array<u64, Settings::NativeMotion::NumMotions>,
+               static_cast<std::size_t>(MotionSampleReader::Count)>
+        motion_sample_read{};
     std::array<s64, Settings::NativeMotion::NumMotions> motion_sample_last_push{};
 
     mutable std::mutex callback_mutex;

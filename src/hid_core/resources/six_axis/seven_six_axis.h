@@ -25,6 +25,7 @@ class System;
 
 namespace Core::HID {
 class EmulatedConsole;
+class EmulatedController;
 struct ControllerMotion;
 } // namespace Core::HID
 
@@ -96,10 +97,15 @@ private:
     struct Ring {
         u64 sampling_number{};
         u64 write_index{};
+        u64 pending_time{};
+        Common::Vec<f32, 3> pending_gyro{};
+        Common::Vec<f32, 3> pending_accel{};
     };
 
     void WriteSample(Common::ProcessAddress ring_address, Ring& ring,
-                     const Core::HID::ControllerMotion& motion);
+                     const Core::HID::ControllerMotion& motion, u64 delta_time);
+    void WriteSamples(Common::ProcessAddress ring_address, Ring& ring,
+                      Core::HID::EmulatedController& controller, std::size_t motion_index);
 
     std::mutex mutex;
     std::array<Ring, 8> left_rings{};

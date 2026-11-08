@@ -74,6 +74,8 @@ constexpr u64 ImuRingSamples = 16;
 constexpr u64 ImuRightRings = 0x1950;
 constexpr u64 ImuConsoleRing = 0x32a0;
 constexpr u64 ImuSampleInterval = 5'000'000;
+constexpr u64 ImuMergedInterval = 4'000'000;
+constexpr s64 ImuMaxSampleAge = 100'000;
 constexpr f32 MetersPerSecondSquaredPerG = 9.80665f;
 constexpr f32 RadiansPerTurn = 6.2831855f;
 } // namespace
@@ -89,6 +91,16 @@ void NpadImu::Enable(Common::ProcessAddress address, Kernel::KProcess* owner) {
     console_ring = {};
     buffer = address;
     buffer_owner = owner;
+    auto& hid_core = system.HIDCore();
+    for (u64 index = 0; index < left_rings.size(); ++index) {
+        if (auto* const controller =
+                hid_core.GetEmulatedController(static_cast<Core::HID::NpadIdType>(index))) {
+            controller->DiscardMotionSamples(Core::HID::MotionSampleReader::NpadImu);
+        }
+    }
+    if (auto* const handheld = hid_core.GetEmulatedController(Core::HID::NpadIdType::Handheld)) {
+        handheld->DiscardMotionSamples(Core::HID::MotionSampleReader::NpadImu);
+    }
 }
 
 void NpadImu::Disable() {
@@ -98,10 +110,10 @@ void NpadImu::Disable() {
 }
 
 void NpadImu::WriteSample(Common::ProcessAddress ring_address, Ring& ring,
-                          const Core::HID::ControllerMotion& motion) {
+                          const Core::HID::ControllerMotion& motion, u64 delta_time) {
     const Sample sample{
         .sampling_number = ++ring.sampling_number,
-        .delta_time = ImuSampleInterval,
+        .delta_time = delta_time,
         .accel = motion.accel * MetersPerSecondSquaredPerG,
         .gyro = motion.gyro * RadiansPerTurn,
     };
@@ -111,6 +123,34 @@ void NpadImu::WriteSample(Common::ProcessAddress ring_address, Ring& ring,
     memory.Write64(ring_address + ImuRingWriteIndex, ring.write_index);
 }
 
+void NpadImu::WriteSamples(Common::ProcessAddress ring_address, Ring& ring,
+                           Core::HID::EmulatedController& controller, std::size_t motion_index) {
+    if (!controller.HasMotionSampleStream(motion_index)) {
+        WriteSample(ring_address, ring, controller.GetMotions()[motion_index],
+                    ImuSampleInterval);
+        return;
+    }
+    std::array<Core::HID::ControllerMotionSample, ImuRingSamples / 2> samples{};
+    const std::size_t count = controller.PopMotionSamples(
+        motion_index, samples, Core::HID::MotionSampleReader::NpadImu, ImuMaxSampleAge);
+    for (std::size_t i = 0; i < count; ++i) {
+        const u64 delta_us = samples[i].delta_timestamp;
+        const u64 delta_time =
+            delta_us == 0 || delta_us > 100'000 ? ImuSampleInterval : delta_us * 1000;
+        ring.pending_time += delta_time;
+        ring.pending_gyro += samples[i].motion.gyro * static_cast<f32>(delta_time);
+        ring.pending_accel = samples[i].motion.accel;
+        if (ring.pending_time >= ImuMergedInterval) {
+            Core::HID::ControllerMotion merged{};
+            merged.accel = ring.pending_accel;
+            merged.gyro = ring.pending_gyro / static_cast<f32>(ring.pending_time);
+            WriteSample(ring_address, ring, merged, ring.pending_time);
+            ring.pending_time = 0;
+            ring.pending_gyro = {};
+        }
+    }
+}
+
 void NpadImu::OnUpdate() {
     std::scoped_lock lock{mutex};
     if (buffer_owner == nullptr || !Settings::values.motion_enabled.GetValue()) {
@@ -118,33 +158,32 @@ void NpadImu::OnUpdate() {
     }
     auto& hid_core = system.HIDCore();
     for (u64 index = 0; index < left_rings.size(); ++index) {
-        const auto* const controller =
+        auto* const controller =
             hid_core.GetEmulatedController(static_cast<Core::HID::NpadIdType>(index));
         if (controller == nullptr || !controller->IsConnected()) {
             continue;
         }
-        const auto motions = controller->GetMotions();
         const auto left = buffer + index * ImuRingSize;
         const auto right = buffer + ImuRightRings + index * ImuRingSize;
         switch (controller->GetNpadStyleIndex()) {
         case Core::HID::NpadStyleIndex::Fullkey:
         case Core::HID::NpadStyleIndex::JoyconLeft:
-            WriteSample(left, left_rings[index], motions[0]);
+            WriteSamples(left, left_rings[index], *controller, 0);
             break;
         case Core::HID::NpadStyleIndex::JoyconRight:
-            WriteSample(right, right_rings[index], motions[1]);
+            WriteSamples(right, right_rings[index], *controller, 1);
             break;
         case Core::HID::NpadStyleIndex::JoyconDual:
-            WriteSample(left, left_rings[index], motions[0]);
-            WriteSample(right, right_rings[index], motions[1]);
+            WriteSamples(left, left_rings[index], *controller, 0);
+            WriteSamples(right, right_rings[index], *controller, 1);
             break;
         default:
             break;
         }
     }
-    const auto* const handheld = hid_core.GetEmulatedController(Core::HID::NpadIdType::Handheld);
+    auto* const handheld = hid_core.GetEmulatedController(Core::HID::NpadIdType::Handheld);
     if (handheld != nullptr && handheld->IsConnected()) {
-        WriteSample(buffer + ImuConsoleRing, console_ring, handheld->GetMotions()[0]);
+        WriteSamples(buffer + ImuConsoleRing, console_ring, *handheld, 0);
     }
 }
 
