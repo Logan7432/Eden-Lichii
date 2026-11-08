@@ -274,6 +274,21 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
     INSERT(Settings, bg_red, QString(), QString());
     INSERT(Settings, bg_green, QString(), QString());
     INSERT(Settings, bg_blue, QString(), QString());
+    INSERT(Settings, frame_generation, tr("Frame generation"),
+           tr("Generates extra frames between the ones the game renders using Lossless "
+              "Scaling's frame generation (LSFG), for smoother motion.\nOnly the game image is "
+              "processed: menus, the cursor and Eden's UI stay untouched.\nRequires your own "
+              "copy of Lossless Scaling (Lossless.dll). Works with Vulkan and OpenGL.\nThe display "
+              "refresh rate should be at least the game FPS times the multiplier."));
+    INSERT(Settings, frame_generation_multiplier, tr("Multiplier"),
+           tr("How many frames are shown per rendered frame.\n2x turns 60 FPS into 120 FPS, "
+              "3x into 180 FPS and so on."));
+    INSERT(Settings, frame_generation_flow_scale, tr("Flow scale"),
+           tr("Resolution of the motion estimation relative to the output.\nLower values are "
+              "faster, especially at high resolutions, at the cost of some quality."));
+    INSERT(Settings, frame_generation_performance, tr("Performance mode"),
+           tr("Uses a lighter model that is considerably faster with a small loss in quality."));
+    INSERT(Settings, lossless_dll_path, tr("Lossless.dll"), QString());
 
     INSERT(Settings, frame_gen, tr("Enable Frame Generation"), QString());
     INSERT(Settings, frame_gen_type, tr("Frame Generation Type"), QString());
@@ -509,6 +524,16 @@ std::unique_ptr<ComboboxTranslationMap> ComboboxEnumeration(QObject* parent) {
              PAIR(AstcRecompression, Bc1, tr("BC1 (Low quality)")),
              PAIR(AstcRecompression, Bc3, tr("BC3 (Medium quality)")),
          }});
+    translations->insert({Settings::EnumMetadata<Settings::FrameGenerationMultiplier>::Index(),
+                          {
+                              PAIR(FrameGenerationMultiplier, X2, tr("2x")),
+                              PAIR(FrameGenerationMultiplier, X3, tr("3x")),
+                              PAIR(FrameGenerationMultiplier, X4, tr("4x")),
+                              PAIR(FrameGenerationMultiplier, X5, tr("5x")),
+                              PAIR(FrameGenerationMultiplier, X6, tr("6x")),
+                              PAIR(FrameGenerationMultiplier, X7, tr("7x")),
+                              PAIR(FrameGenerationMultiplier, X8, tr("8x")),
+                          }});
     translations->insert({Settings::EnumMetadata<Settings::FramePacingMode>::Index(),
                           {
                               PAIR(FramePacingMode, Target_Auto, tr("Auto")),

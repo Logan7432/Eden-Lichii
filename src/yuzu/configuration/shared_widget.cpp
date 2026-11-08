@@ -24,6 +24,7 @@
 #include <QLabel>
 #include <QLayout>
 #include <QLineEdit>
+#include <QMouseEvent>
 #include <QObject>
 #include <QPushButton>
 #include <QRadioButton>
@@ -94,10 +95,38 @@ QPushButton* Widget::CreateRestoreGlobalButton(bool using_global, QWidget* paren
     return restore_button;
 }
 
+static QString RowTitle(QString text) {
+    text = text.trimmed();
+    if (text.endsWith(QLatin1Char(':')) || text.endsWith(QChar(0xFF1A))) {
+        text.chop(1);
+    }
+    return text.trimmed();
+}
+
 QLabel* Widget::CreateLabel(const QString& text) {
-    QLabel* qt_label = new QLabel(text, this->parent);
+    QLabel* qt_label = new QLabel(RowTitle(text), this->parent);
     qt_label->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    qt_label->setWordWrap(true);
     return qt_label;
+}
+
+void Widget::mousePressEvent(QMouseEvent* event) {
+    if (switch_row && checkbox && checkbox->isEnabled() && event->button() == Qt::LeftButton) {
+        event->accept();
+        return;
+    }
+    QWidget::mousePressEvent(event);
+}
+
+void Widget::mouseReleaseEvent(QMouseEvent* event) {
+    if (switch_row && checkbox && checkbox->isEnabled() && event->button() == Qt::LeftButton) {
+        if (rect().contains(event->position().toPoint())) {
+            checkbox->click();
+        }
+        event->accept();
+        return;
+    }
+    QWidget::mouseReleaseEvent(event);
 }
 
 QWidget* Widget::CreateCheckBox(Settings::BasicSetting* bool_setting, const QString& label,
@@ -540,8 +569,13 @@ void Widget::SetupComponent(const QString& label, std::function<void()>& load_fu
     created = true;
     const auto type_id = setting.TypeId();
 
+    setProperty("edenSettingRow", true);
+    setAttribute(Qt::WA_StyledBackground);
+    setAttribute(Qt::WA_Hover);
+    setMinimumHeight(50);
     QHBoxLayout* layout = new QHBoxLayout(this);
-    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setContentsMargins(16, 7, 12, 7);
+    layout->setSpacing(14);
 
     if (other_setting == nullptr) {
         // A paired setting without the Paired specialization gets a widget of its own, and
@@ -609,16 +643,20 @@ void Widget::SetupComponent(const QString& label, std::function<void()>& load_fu
     }
 
     if (require_checkbox) {
-        QWidget* lhs =
-            CreateCheckBox(other_setting, label, checkbox_serializer, checkbox_restore_func, touch);
+        QWidget* lhs = CreateCheckBox(other_setting, RowTitle(label), checkbox_serializer,
+                                      checkbox_restore_func, touch);
         layout->addWidget(lhs, 1);
-    } else if (type_id != "bool") {
+    } else {
         QLabel* qt_label = CreateLabel(label);
         layout->addWidget(qt_label, 1);
     }
 
     if (type_id == "bool") {
-        data_component = CreateCheckBox(&setting, label, serializer, restore_func, touch);
+        data_component = CreateCheckBox(&setting, QString{}, serializer, restore_func, touch);
+        checkbox->setProperty("edenSwitch", true);
+        checkbox->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+        checkbox->setAccessibleName(RowTitle(label));
+        switch_row = !require_checkbox;
     } else if (type_id == "string") {
         switch (request) {
         case RequestType::Default:
@@ -686,7 +724,13 @@ void Widget::SetupComponent(const QString& label, std::function<void()>& load_fu
         return;
     }
 
-    layout->addWidget(data_component, 1);
+    if (type_id == "bool" || request == RequestType::RadioGroup) {
+        layout->addWidget(data_component, 0, Qt::AlignRight | Qt::AlignVCenter);
+    } else {
+        data_component->setMinimumWidth(300);
+        data_component->setMaximumWidth(460);
+        layout->addWidget(data_component, 0);
+    }
 
     if (!managed) {
         return;
@@ -813,7 +857,7 @@ Builder::~Builder() = default;
 
 static bool IsAndroidOnly(const Settings::BasicSetting& setting) {
     const std::string& label = setting.GetLabel();
-    return label == "emulate_bgr565";
+    return label == "frame_gen" || label.starts_with("frame_gen_") || label == "emulate_bgr565";
 }
 
 Widget* Builder::BuildWidget(Settings::BasicSetting* setting,

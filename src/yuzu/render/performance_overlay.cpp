@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "core/perf_stats.h"
+#include "video_core/frame_generation.h"
 #include "performance_overlay.h"
 #include "ui_performance_overlay.h"
 
@@ -103,6 +104,9 @@ void PerformanceOverlay::updateStats(const Core::PerfStatsResults& results,
         static constexpr double FPS_SAMPLE_THRESHOLD = 3.0;
 
         QString fpsText = tr("%1 fps").arg(std::round(fps), 0, 'f', 0);
+        if (const double shown = VideoCore::FrameGeneration::OutputFps(); shown > 0.5) {
+            fpsText += QStringLiteral(" ") + tr("(FG: %1)").arg(std::round(shown), 0, 'f', 0);
+        }
         // if (!m_fpsSuffix.isEmpty()) fpsText = fpsText % QStringLiteral(" (%1)").arg(m_fpsSuffix);
         ui->fps->setText(fpsText);
 

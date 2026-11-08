@@ -47,6 +47,18 @@
 #include "set_play_time_dialog.h"
 #include "util/util.h"
 #include "yuzu/game/game_list.h"
+#include "yuzu/game/library/button_prompts.h"
+#include "yuzu/game/library/library_theme.h"
+#include "yuzu/ui/action_sheet.h"
+#include "yuzu/ui/eden_style.h"
+#include "yuzu/ui/top_bar.h"
+#include "input_common/main.h"
+#include "video_core/frame_generation.h"
+#include <QHBoxLayout>
+#include <QListWidget>
+#include <QRegularExpression>
+#include <QTabWidget>
+#include <initializer_list>
 #include "yuzu/nup_dialogs.h"
 #include "yuzu/overlay_panel.h"
 #include "yuzu/shader_warm_dialog.h"
@@ -269,6 +281,7 @@ static inline void ApplyDarkToTopLevel(QWidget* w, bool on) {
     if (!w || !w->isWindow())
         return;
     ApplyWindowsTitleBarDarkMode(reinterpret_cast<HWND>(w->winId()), on);
+    EdenUi::ApplyWindowFrame(w);
 }
 
 namespace {
@@ -1365,6 +1378,7 @@ void MainWindow::InitializeWidgets() {
 
     game_list = new GameList(QtCommon::vfs, QtCommon::provider.get(), *play_time_manager,
                              *QtCommon::system, this);
+    game_list->SetInputSubsystem(input_subsystem.get());
     ui->horizontalLayout->addWidget(game_list);
 
     game_list_placeholder = new GameListPlaceholder(this);
@@ -1418,15 +1432,23 @@ void MainWindow::InitializeWidgets() {
         statusBar()->addPermanentWidget(label);
     }
 
-    firmware_label = new QLabel();
-    firmware_label->setObjectName(QStringLiteral("FirmwareLabel"));
+    firmware_label = new QPushButton();
+    firmware_label->setObjectName(QStringLiteral("FirmwarePill"));
     firmware_label->setVisible(false);
-    firmware_label->setContentsMargins(4, 0, 4, 0);
     firmware_label->setFocusPolicy(Qt::NoFocus);
     statusBar()->addPermanentWidget(firmware_label);
 
-    statusBar()->addPermanentWidget(multiplayer_state->GetStatusText(), 0);
-    statusBar()->addPermanentWidget(multiplayer_state->GetStatusIcon(), 0);
+    multiplayer_pill = new QWidget();
+    multiplayer_pill->setObjectName(QStringLiteral("MultiplayerPill"));
+    multiplayer_pill->setAttribute(Qt::WA_StyledBackground);
+    multiplayer_pill->setAttribute(Qt::WA_Hover);
+    multiplayer_pill->setCursor(Qt::PointingHandCursor);
+    auto* multiplayer_layout = new QHBoxLayout(multiplayer_pill);
+    multiplayer_layout->setContentsMargins(10, 0, 12, 0);
+    multiplayer_layout->setSpacing(7);
+    multiplayer_layout->addWidget(multiplayer_state->GetStatusIcon());
+    multiplayer_layout->addWidget(multiplayer_state->GetStatusText());
+    statusBar()->addPermanentWidget(multiplayer_pill, 0);
 
     tas_label = new QLabel();
     tas_label->setObjectName(QStringLiteral("TASlabel"));
@@ -1509,6 +1531,26 @@ void MainWindow::InitializeWidgets() {
                 frame_gen_status_button->repaint();
             });
     statusBar()->insertPermanentWidget(0, frame_gen_status_button);
+    frame_gen_status_button->setVisible(false);
+
+    lsfg_button = new QPushButton();
+    lsfg_button->setObjectName(QStringLiteral("FrameGenStatusBarButton"));
+    lsfg_button->setFocusPolicy(Qt::NoFocus);
+    lsfg_button->setCheckable(true);
+    connect(lsfg_button, &QPushButton::clicked, this, [this] {
+        Settings::values.frame_generation.SetValue(!Settings::values.frame_generation.GetValue());
+        UpdateLsfgButton();
+    });
+    lsfg_button->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(lsfg_button, &QPushButton::customContextMenuRequested, this,
+            [this](const QPoint& menu_location) {
+                QMenu* menu = CreateLsfgMenu(this);
+                menu->exec(lsfg_button->mapToGlobal(menu_location));
+                menu->deleteLater();
+                UpdateLsfgButton();
+            });
+    statusBar()->insertPermanentWidget(0, lsfg_button);
+    UpdateLsfgButton();
 
 #ifdef HAS_RESHADE
     post_shader_status_button = new QPushButton();
@@ -1685,6 +1727,51 @@ void MainWindow::InitializeWidgets() {
     connect(refresh_button, &QPushButton::clicked, this, &MainWindow::OnGameListRefresh);
 
     statusBar()->insertPermanentWidget(0, refresh_button);
+
+    const QFont pill_font = EdenUi::ChromeFont(12.5, QFont::DemiBold);
+    for (QWidget* pill : std::initializer_list<QWidget*>{
+             renderer_status_button, gpu_accuracy_button, dock_status_button, filter_status_button,
+             aa_status_button, volume_button, lsfg_button, firmware_label}) {
+        pill->setFont(pill_font);
+        pill->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+        if (auto* button = qobject_cast<QPushButton*>(pill)) {
+            button->setIconSize(QSize(14, 14));
+        }
+    }
+#ifdef HAS_RESHADE
+    post_shader_status_button->setFont(pill_font);
+    post_shader_status_button->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    post_shader_status_button->setIconSize(QSize(14, 14));
+#endif
+    refresh_button->setIconSize(QSize(16, 16));
+    refresh_button->setToolTip(tr("Refresh the game library"));
+    multiplayer_state->GetStatusText()->setFont(EdenUi::ChromeFont(12.5, QFont::DemiBold));
+    for (QWidget* label : {message_label, shader_building_label, res_scale_label, emu_speed_label,
+                           game_fps_label, emu_frametime_label, tas_label}) {
+        label->setFont(EdenUi::ChromeFont(12.5, QFont::Medium));
+    }
+    UpdateStatusBarIcons();
+
+    menuBar()->setProperty("edenIcons", true);
+    top_bar = new EdenUi::TopBar(menuBar());
+    menuBar()->setCornerWidget(top_bar, Qt::TopRightCorner);
+    connect(top_bar, &EdenUi::TopBar::SettingsClicked, this, &MainWindow::OnConfigure);
+    connect(top_bar, &EdenUi::TopBar::ControllerClicked, this, [this] {
+        configure_start_category = 5;
+        OnConfigure();
+    });
+    connect(top_bar, &EdenUi::TopBar::ProfileClicked, this, &MainWindow::OnSwitchProfile);
+    auto* top_bar_timer = new QTimer(top_bar);
+    top_bar_timer->setInterval(2500);
+    connect(top_bar_timer, &QTimer::timeout, this, [this] {
+        if (isVisible() && !isMinimized()) {
+            UpdateTopBar();
+        }
+    });
+    top_bar_timer->start();
+    connect(&Library::Prompts::Instance(), &Library::Prompts::Changed, this,
+            &MainWindow::UpdateTopBar);
+    UpdateTopBar();
 
     statusBar()->setVisible(true);
     setStyleSheet(QStringLiteral("QStatusBar::item{border: none;}"));
@@ -1955,6 +2042,9 @@ void MainWindow::ConnectWidgetEvents() {
     connect(game_list, &GameList::OpenPerGameGeneralRequested, this,
             &MainWindow::OnGameListOpenPerGameProperties);
     connect(game_list, &GameList::LinkToRyujinxRequested, this, &MainWindow::OnLinkToRyujinx);
+    connect(game_list, &GameList::IconSizeChangeRequested, this, &MainWindow::SetGameIconSize);
+    connect(game_list, &GameList::TreeViewRequested, this, &MainWindow::SetTreeView);
+    connect(game_list, &GameList::MainMenuRequested, this, &MainWindow::OpenMainMenu);
 
     connect(this, &MainWindow::UpdateInstallProgress, this, &MainWindow::IncrementInstallProgress);
 
@@ -7278,9 +7368,7 @@ void MainWindow::ConnectMenuEvents() {
             if (checked) {
                 UISettings::values.game_icon_size.SetValue(size);
                 CheckIconSize();
-
-                game_list->UpdateIconSizes();
-                game_list->RefreshGameDirectory();
+                game_list->ApplyDisplaySettings();
             }
         });
     }
@@ -7289,6 +7377,37 @@ void MainWindow::ConnectMenuEvents() {
 
     ui->action_Show_Game_Name->setChecked(UISettings::values.show_game_name.GetValue());
     connect(ui->action_Show_Game_Name, &QAction::triggered, this, &MainWindow::ToggleShowGameName);
+    DecorateMenus();
+
+    {
+        static constexpr std::array<const char*, 5> prompt_styles{
+            QT_TRANSLATE_NOOP("MainWindow", "Automatic"),
+            QT_TRANSLATE_NOOP("MainWindow", "Xbox"),
+            QT_TRANSLATE_NOOP("MainWindow", "PlayStation"),
+            QT_TRANSLATE_NOOP("MainWindow", "Nintendo"),
+            QT_TRANSLATE_NOOP("MainWindow", "Keyboard"),
+        };
+        QMenu* prompt_menu = new QMenu(tr("&Button Prompts"), ui->menu_View);
+        ui->menu_View->addMenu(prompt_menu);
+        prompt_style_actions = new QActionGroup(this);
+        prompt_style_actions->setExclusive(true);
+        for (size_t i = 0; i < prompt_styles.size(); ++i) {
+            QAction* action = prompt_menu->addAction(
+                QCoreApplication::translate("MainWindow", prompt_styles[i]));
+            action->setCheckable(true);
+            action->setChecked(UISettings::values.library_prompt_style.GetValue() == i);
+            prompt_style_actions->addAction(action);
+            if (i == 0) {
+                prompt_menu->addSeparator();
+            }
+            connect(action, &QAction::triggered, this, [this, i](bool checked) {
+                if (checked) {
+                    UISettings::values.library_prompt_style.SetValue(static_cast<u8>(i));
+                    game_list->RefreshPrompts();
+                }
+            });
+        }
+    }
 
     // Multiplayer
     connect(ui->action_View_Lobby, &QAction::triggered, multiplayer_state,
@@ -7840,6 +7959,8 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
     }
     LOG_INFO(Frontend, "Core load completed: elapsed_ms={}", load_timer.elapsed());
 
+    RecordRecentlyPlayed(title_id);
+
     const auto report_program_id = QtCommon::system->GetApplicationProcessProgramID();
     if (Settings::CurrentProgramIsSwitch2() && report_program_id != 0) {
         auto& session = report_session.emplace();
@@ -8168,7 +8289,8 @@ void MainWindow::OnEmulationStopped() {
     } else {
         game_list->show();
     }
-    game_list->SetFilterFocus();
+    game_list->RefreshPlayTimes();
+    game_list->FocusDefault();
     tas_label->clear();
     input_subsystem->GetTas()->Stop();
     OnTasStateChanged();
@@ -9437,8 +9559,10 @@ void MainWindow::CheckIconSize() {
     // When in grid/carousel view mode, with text off
     // there is no point in having icons turned off
     auto actions = game_size_actions->actions();
-    if (UISettings::values.game_list_mode.GetValue() != Settings::GameListMode::TreeView &&
-        !UISettings::values.show_game_name.GetValue()) {
+    const auto game_list_mode = UISettings::values.game_list_mode.GetValue();
+    if (game_list_mode == Settings::GameListMode::GridView ||
+        (game_list_mode == Settings::GameListMode::CarouselView &&
+         !UISettings::values.show_game_name.GetValue())) {
         u32 newSize = UISettings::values.game_icon_size.GetValue();
         if (newSize == 0) {
             newSize = 64;
@@ -9468,12 +9592,452 @@ void MainWindow::ToggleShowGameName() {
 
     CheckIconSize();
 
-    game_list->UpdateIconSizes();
-    game_list->RefreshGameDirectory();
+    game_list->ApplyDisplaySettings();
+}
+
+void MainWindow::SetGameIconSize(u32 size) {
+    UISettings::values.game_icon_size.SetValue(size);
+    for (size_t i = 0; i < default_game_icon_sizes.size(); i++) {
+        if (default_game_icon_sizes[i].first == size) {
+            game_size_actions->actions().at(static_cast<int>(i))->setChecked(true);
+        }
+    }
+    CheckIconSize();
+    game_list->ApplyDisplaySettings();
+}
+
+void MainWindow::DecorateMenus() {
+    const auto icon = [](QAction* action, Library::Icon kind) {
+        action->setProperty("edenIcon", static_cast<int>(kind));
+    };
+    icon(ui->menu_File->menuAction(), Library::Icon::Folder);
+    icon(ui->menu_Emulation->menuAction(), Library::Icon::Play);
+    icon(ui->menu_View->menuAction(), Library::Icon::Eye);
+    icon(ui->menu_Tools->menuAction(), Library::Icon::Wrench);
+    icon(ui->menu_Multiplayer->menuAction(), Library::Icon::People);
+    icon(ui->menu_Help->menuAction(), Library::Icon::Info);
+
+    icon(ui->action_Install_File_NAND, Library::Icon::Download);
+    icon(ui->action_Load_File, Library::Icon::Play);
+    icon(ui->action_Load_Folder, Library::Icon::Folder);
+    icon(ui->menu_recent_files->menuAction(), Library::Icon::Clock);
+    icon(ui->action_Load_Amiibo, Library::Icon::Image);
+    icon(ui->menuOpen_Eden_Folders->menuAction(), Library::Icon::Folder);
+    icon(ui->action_Exit, Library::Icon::Power);
+    icon(ui->action_Pause, Library::Icon::Play);
+    icon(ui->action_Stop, Library::Icon::Close);
+    icon(ui->action_Restart, Library::Icon::Download);
+    icon(ui->action_Configure, Library::Icon::Gear);
+    icon(ui->action_Configure_Current_Game, Library::Icon::Gear);
+    icon(ui->action_Fullscreen, Library::Icon::Grid);
+    icon(ui->menu_Game_List_Mode->menuAction(), Library::Icon::List);
+    icon(ui->menuGame_Icon_Size->menuAction(), Library::Icon::Image);
+    icon(ui->action_View_Lobby, Library::Icon::Globe);
+    icon(ui->action_Start_Room, Library::Icon::People);
+    icon(ui->action_Connect_To_Room, Library::Icon::Link);
+    icon(ui->action_Show_Room, Library::Icon::People);
+    icon(ui->action_Leave_Room, Library::Icon::Close);
+    icon(ui->action_Install_Keys, Library::Icon::Shield);
+    icon(ui->menuInstall_Firmware->menuAction(), Library::Icon::Download);
+    icon(ui->action_Verify_installed_contents, Library::Icon::Shield);
+    icon(ui->action_Data_Manager, Library::Icon::Folder);
+    icon(ui->menu_Applets->menuAction(), Library::Icon::Grid);
+    icon(ui->menu_Create_Shortcuts->menuAction(), Library::Icon::Shortcut);
+    icon(ui->action_Capture_Screenshot, Library::Icon::Image);
+    icon(ui->action_Open_UserHandbook, Library::Icon::Info);
+    icon(ui->action_Open_Mods_Page, Library::Icon::Globe);
+    icon(ui->action_About, Library::Icon::Info);
+}
+
+void MainWindow::UpdateStatusBarIcons() {
+    if (!renderer_status_button) {
+        return;
+    }
+    using Library::Icon;
+    const Library::Theme& t = Library::CurrentTheme();
+    const EdenUi::StatusColors status = EdenUi::CurrentStatusColors();
+    renderer_status_button->setIcon(
+        EdenUi::StateIcon(Icon::Display, status.vulkan, Icon::Display, status.opengl, 14));
+    gpu_accuracy_button->setIcon(
+        EdenUi::StateIcon(Icon::Gauge, status.gpu_high, Icon::Gauge, status.gpu_normal, 14));
+    dock_status_button->setIcon(
+        EdenUi::StateIcon(Icon::Display, t.text, Icon::Handheld, t.text, 14));
+    filter_status_button->setIcon(
+        EdenUi::StateIcon(Icon::Image, t.text, Icon::Image, t.text_faint, 14));
+    aa_status_button->setIcon(EdenUi::StateIcon(Icon::Grid, t.text, Icon::Grid, t.text_faint, 14));
+    volume_button->setIcon(
+        EdenUi::StateIcon(Icon::Speaker, t.text, Icon::Speaker, t.text_faint, 14));
+    lsfg_button->setIcon(
+        EdenUi::StateIcon(Icon::FrameGen, t.accent, Icon::FrameGen, t.text_faint, 14));
+    firmware_label->setIcon(EdenUi::IconPixmap(Icon::Chip, 14, t.text_dim));
+    refresh_button->setIcon(EdenUi::IconPixmap(Icon::Refresh, 16, t.text_dim));
+    if (multiplayer_state) {
+        multiplayer_state->UpdateThemedIcons();
+    }
+}
+
+void MainWindow::UpdateTopBar() {
+    if (!top_bar) {
+        return;
+    }
+    auto& system = *QtCommon::system;
+
+    auto& hid = system.HIDCore();
+    Core::HID::EmulatedController* controller =
+        hid.GetEmulatedController(Core::HID::NpadIdType::Player1);
+    bool handheld = false;
+    if (controller == nullptr || !controller->IsConnected()) {
+        controller = hid.GetEmulatedController(Core::HID::NpadIdType::Handheld);
+        handheld = true;
+    }
+    QString device_name = tr("No controller");
+    Library::Icon device_icon = Library::Icon::Controller;
+    bool present = false;
+    if (controller != nullptr && controller->IsConnected()) {
+        const Common::ParamPackage param =
+            controller->GetButtonParam(Settings::NativeButton::A);
+        const std::string engine = param.Get("engine", "");
+        if (engine == "keyboard" || engine == "mouse") {
+            device_name = tr("Keyboard");
+            device_icon = Library::Icon::Keyboard;
+            present = true;
+        } else if (!engine.empty()) {
+            device_icon = handheld ? Library::Icon::Handheld : Library::Icon::Controller;
+            device_name = tr("Disconnected");
+            if (input_subsystem) {
+                for (const auto& device : input_subsystem->GetInputDevices()) {
+                    if (device.Get("engine", "") == engine &&
+                        device.Get("guid", "") == param.Get("guid", "") &&
+                        device.Get("port", 0) == param.Get("port", 0)) {
+                        static const QRegularExpression trailing_index(
+                            QStringLiteral("\\s+\\d+$"));
+                        device_name = QString::fromStdString(device.Get("display", ""))
+                                          .remove(trailing_index)
+                                          .trimmed();
+                        if (device_name.isEmpty()) {
+                            device_name = tr("Controller");
+                        }
+                        present = true;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    top_bar->SetController(device_name, device_icon, present && device_icon != Library::Icon::Keyboard);
+
+    QString user_name;
+    QPixmap avatar;
+    auto& profiles = system.GetProfileManager();
+    if (const auto uuid = profiles.GetUser(Settings::values.current_user.GetValue())) {
+        Service::Account::ProfileBase profile{};
+        if (profiles.GetProfileBase(*uuid, profile)) {
+            user_name = QString::fromStdString(Common::StringFromFixedZeroTerminatedBuffer(
+                reinterpret_cast<const char*>(profile.username.data()), profile.username.size()));
+        }
+        static QString cached_path;
+        static QPixmap cached_avatar;
+        const auto path = Common::FS::GetEdenPath(Common::FS::EdenPath::NANDDir) /
+                          fmt::format("system/save/8000000000000010/su/avators/{}.jpg",
+                                      uuid->FormattedString());
+        const QString avatar_path = QString::fromStdString(Common::FS::PathToUTF8String(path));
+        if (avatar_path != cached_path) {
+            cached_path = avatar_path;
+            cached_avatar = QPixmap(avatar_path);
+            if (!cached_avatar.isNull()) {
+                cached_avatar = cached_avatar.scaled(64, 64, Qt::KeepAspectRatioByExpanding,
+                                                     Qt::SmoothTransformation);
+            }
+        }
+        avatar = cached_avatar;
+    }
+    top_bar->SetProfile(user_name, avatar);
+    top_bar->SetProfileEnabled(!emulation_running);
+}
+
+void MainWindow::OnSwitchProfile() {
+    if (emulation_running) {
+        return;
+    }
+    const Core::Frontend::ProfileSelectParameters parameters{
+        .mode = Service::AM::Frontend::UiMode::UserSelector,
+        .invalid_uid_list = {},
+        .display_options = {},
+        .purpose = Service::AM::Frontend::UserSelectionPurpose::General,
+    };
+    if (SelectAndSetCurrentUser(parameters)) {
+        config->SaveAllValues();
+    }
+    UpdateTopBar();
+}
+
+QMenu* MainWindow::CreateQuickSettingsMenu(QWidget* parent) {
+    auto* menu = new QMenu(tr("Quick settings"), parent);
+    menu->menuAction()->setProperty("edenIcon", static_cast<int>(Library::Icon::Gear));
+
+    const auto add_choices = [this, menu](const QString& title, Library::Icon icon,
+                                          const auto& texts, auto current, auto apply) {
+        QMenu* page = menu->addMenu(QString{});
+        page->menuAction()->setProperty("edenIcon", static_cast<int>(icon));
+        auto* group = new QActionGroup(page);
+        const auto set_title = [page, title, &texts](auto value) {
+            const auto it = texts.find(value);
+            page->setTitle(it != texts.end() ? QStringLiteral("%1: %2").arg(
+                                                   title, QCoreApplication::translate(
+                                                              "MainWindow",
+                                                              it->second.toUtf8().constData()))
+                                             : title);
+        };
+        set_title(current);
+        for (const auto& [value, text] : texts) {
+            if constexpr (std::is_same_v<std::decay_t<decltype(value)>, Settings::RendererBackend>) {
+                if (value == Settings::RendererBackend::Null) {
+                    continue;
+                }
+            }
+            QAction* action =
+                page->addAction(QCoreApplication::translate("MainWindow", text.toUtf8().constData()));
+            action->setCheckable(true);
+            action->setChecked(value == current);
+            group->addAction(action);
+            connect(action, &QAction::triggered, this, [this, value, apply, set_title] {
+                apply(value);
+                set_title(value);
+                UpdateStatusButtons();
+            });
+        }
+    };
+
+    add_choices(tr("Renderer"), Library::Icon::Image, ConfigurationShared::renderer_backend_texts_map,
+                Settings::values.renderer_backend.GetValue(), [](Settings::RendererBackend value) {
+                    Settings::values.renderer_backend.SetValue(value);
+                });
+    add_choices(tr("GPU accuracy"), Library::Icon::Shield, ConfigurationShared::gpu_accuracy_texts_map,
+                Settings::values.gpu_accuracy.GetValue(), [](Settings::GpuAccuracy value) {
+                    Settings::values.gpu_accuracy.SetValue(value);
+                });
+    add_choices(tr("Console mode"), Library::Icon::Controller,
+                ConfigurationShared::use_docked_mode_texts_map,
+                Settings::values.use_docked_mode.GetValue(), [this](Settings::ConsoleMode value) {
+                    if (value != Settings::values.use_docked_mode.GetValue()) {
+                        OnToggleDockedMode();
+                    }
+                });
+    add_choices(tr("Window filter"), Library::Icon::Eye, ConfigurationShared::scaling_filter_texts_map,
+                Settings::values.scaling_filter.GetValue(), [](Settings::ScalingFilter value) {
+                    Settings::values.scaling_filter.SetValue(value);
+                });
+    add_choices(tr("Anti-aliasing"), Library::Icon::Grid, ConfigurationShared::anti_aliasing_texts_map,
+                Settings::values.anti_aliasing.GetValue(), [](Settings::AntiAliasing value) {
+                    Settings::values.anti_aliasing.SetValue(value);
+                });
+
+    menu->addMenu(CreateLsfgMenu(menu));
+
+    QMenu* volume = menu->addMenu(QString{});
+    volume->menuAction()->setProperty("edenIcon", static_cast<int>(Library::Icon::Speaker));
+    const auto update_volume_title = [volume] {
+        volume->setTitle(Settings::values.audio_muted
+                             ? tr("Volume: muted")
+                             : tr("Volume: %1%").arg(Settings::values.volume.GetValue()));
+    };
+    update_volume_title();
+    QAction* mute = volume->addAction(tr("Mute"));
+    mute->setCheckable(true);
+    mute->setChecked(Settings::values.audio_muted.GetValue());
+    connect(mute, &QAction::triggered, this, [this, update_volume_title](bool checked) {
+        Settings::values.audio_muted = checked;
+        UpdateVolumeUI();
+        update_volume_title();
+    });
+    const auto add_step = [this, volume, update_volume_title](const QString& text, int delta) {
+        QAction* action = volume->addAction(text);
+        action->setProperty("edenKeepOpen", true);
+        connect(action, &QAction::triggered, this, [this, delta, update_volume_title] {
+            const int value = std::clamp(static_cast<int>(Settings::values.volume.GetValue()) + delta,
+                                         0, 200);
+            Settings::values.audio_muted = false;
+            Settings::values.volume.SetValue(static_cast<u8>(value));
+            UpdateVolumeUI();
+            update_volume_title();
+        });
+    };
+    add_step(tr("Louder (+10%)"), 10);
+    add_step(tr("Quieter (-10%)"), -10);
+    QAction* reset_volume = volume->addAction(tr("Reset to 100%"));
+    reset_volume->setProperty("edenKeepOpen", true);
+    connect(reset_volume, &QAction::triggered, this, [this, update_volume_title] {
+        Settings::values.audio_muted = false;
+        Settings::values.volume.SetValue(100);
+        UpdateVolumeUI();
+        update_volume_title();
+    });
+    return menu;
+}
+
+void MainWindow::OpenMainMenu(const QPoint& global_pos) {
+    auto* root = new QMenu();
+    if (!game_list->IsTreeMode() && game_list->isVisible()) {
+        root->addMenu(game_list->CreateLibraryMenu(root));
+    }
+    if (!emulation_running) {
+        root->addMenu(CreateQuickSettingsMenu(root));
+    }
+    root->addSeparator();
+    for (QMenu* menu : {ui->menu_File, ui->menu_Emulation, ui->menu_View, ui->menu_Tools,
+                        ui->menu_Multiplayer, ui->menu_Help}) {
+        root->addMenu(menu);
+    }
+
+    EdenUi::ActionSheet::Header header;
+    header.title = QStringLiteral("Eden");
+    header.subtitle = tr("Main menu");
+    header.image = windowIcon().pixmap(52, 52);
+    EdenUi::ActionSheet::Open(this, root, header, global_pos, true);
+}
+
+void MainWindow::RecordRecentlyPlayed(u64 title_id) {
+    if (title_id == 0) {
+        return;
+    }
+    constexpr qsizetype max_recently_played = 50;
+    auto& recent = UISettings::values.recently_played_ids;
+    recent.removeAll(title_id);
+    recent.prepend(title_id);
+    if (recent.size() > max_recently_played) {
+        recent.resize(max_recently_played);
+    }
+}
+
+void MainWindow::UpdateLsfgButton() {
+    if (!lsfg_button) {
+        return;
+    }
+    namespace FG = VideoCore::FrameGeneration;
+    const bool enabled = Settings::values.frame_generation.GetValue();
+    const bool supported_renderer =
+        Settings::values.renderer_backend.GetValue() != Settings::RendererBackend::Null;
+    const auto snapshot = FG::GetSnapshot();
+
+    QString status;
+    bool problem = false;
+    if (enabled && !supported_renderer) {
+        status = tr("Frame generation needs the Vulkan or OpenGL renderer.");
+        problem = true;
+    } else if (enabled) {
+        switch (snapshot.state) {
+        case FG::State::MissingDll:
+        case FG::State::Failed:
+        case FG::State::Unsupported:
+            status = QString::fromStdString(snapshot.message);
+            problem = true;
+            break;
+        case FG::State::Active:
+            status = tr("Generating frames.");
+            break;
+        case FG::State::Starting:
+            status = tr("Starting...");
+            break;
+        case FG::State::Off:
+            status = tr("Starts with the next game frame.");
+            break;
+        }
+    }
+
+    lsfg_button->setChecked(enabled);
+    lsfg_button->setText(enabled ? tr("FG %1x").arg(FG::Multiplier()) : tr("FG Off"));
+    QString tooltip = tr("Frame generation (Lossless Scaling) - click to toggle, right click for "
+                         "the multiplier and options");
+    if (!status.isEmpty()) {
+        tooltip += QStringLiteral("\n") + status;
+    }
+    lsfg_button->setToolTip(tooltip);
+    if (lsfg_button->property("fgProblem").toBool() != problem) {
+        lsfg_button->setProperty("fgProblem", problem);
+        lsfg_button->style()->unpolish(lsfg_button);
+        lsfg_button->style()->polish(lsfg_button);
+    }
+}
+
+void MainWindow::OpenLsfgSettings() {
+    configure_start_category = 3;
+    configure_start_tab = 3;
+    OnConfigure();
+}
+
+QMenu* MainWindow::CreateLsfgMenu(QWidget* parent) {
+    namespace FG = VideoCore::FrameGeneration;
+    auto* menu = new QMenu(parent);
+    const auto set_title = [menu] {
+        menu->setTitle(Settings::values.frame_generation.GetValue()
+                           ? tr("Frame generation: %1x").arg(FG::Multiplier())
+                           : tr("Frame generation: Off"));
+    };
+    set_title();
+    menu->menuAction()->setProperty("edenIcon", static_cast<int>(Library::Icon::FrameGen));
+
+    QAction* toggle = menu->addAction(tr("Frame generation"));
+    toggle->setCheckable(true);
+    toggle->setChecked(Settings::values.frame_generation.GetValue());
+    toggle->setProperty("edenIcon", static_cast<int>(Library::Icon::FrameGen));
+    connect(toggle, &QAction::toggled, this, [this, set_title](bool checked) {
+        Settings::values.frame_generation.SetValue(checked);
+        set_title();
+        UpdateLsfgButton();
+    });
+
+    menu->addSeparator();
+    auto* multipliers = new QActionGroup(menu);
+    const auto current = Settings::values.frame_generation_multiplier.GetValue();
+    for (u32 index = 0; index <= static_cast<u32>(std::remove_cvref_t<decltype(current)>::X8); ++index) {
+        const auto value = static_cast<decltype(current)>(index);
+        QAction* action = menu->addAction(tr("%1x").arg(index + 2));
+        action->setCheckable(true);
+        action->setChecked(value == current);
+        multipliers->addAction(action);
+        connect(action, &QAction::triggered, this, [this, value, toggle, set_title] {
+            Settings::values.frame_generation_multiplier.SetValue(value);
+            Settings::values.frame_generation.SetValue(true);
+            toggle->setChecked(true);
+            set_title();
+            UpdateLsfgButton();
+        });
+    }
+
+    menu->addSeparator();
+    QMenu* flow = menu->addMenu(tr("Flow scale: %1%")
+                                    .arg(Settings::values.frame_generation_flow_scale.GetValue()));
+    flow->menuAction()->setProperty("edenIcon", static_cast<int>(Library::Icon::Sliders));
+    auto* flows = new QActionGroup(flow);
+    for (const int percent : {100, 75, 50, 25}) {
+        QAction* action = flow->addAction(tr("%1%").arg(percent));
+        action->setCheckable(true);
+        action->setChecked(Settings::values.frame_generation_flow_scale.GetValue() == percent);
+        flows->addAction(action);
+        connect(action, &QAction::triggered, this, [flow, percent] {
+            Settings::values.frame_generation_flow_scale.SetValue(percent);
+            flow->setTitle(tr("Flow scale: %1%").arg(percent));
+        });
+    }
+
+    QAction* performance = menu->addAction(tr("Performance mode"));
+    performance->setCheckable(true);
+    performance->setChecked(Settings::values.frame_generation_performance.GetValue());
+    performance->setProperty("edenIcon", static_cast<int>(Library::Icon::Gauge));
+    connect(performance, &QAction::toggled, this, [](bool checked) {
+        Settings::values.frame_generation_performance.SetValue(checked);
+    });
+
+    menu->addSeparator();
+    QAction* settings = menu->addAction(tr("Frame generation settings..."));
+    settings->setProperty("edenIcon", static_cast<int>(Library::Icon::Gear));
+    connect(settings, &QAction::triggered, this, &MainWindow::OpenLsfgSettings);
+    return menu;
 }
 
 void MainWindow::OnConfigure() {
     const auto old_theme = UISettings::values.theme;
+    const auto old_accent = UISettings::values.accent_color.GetValue();
     const bool old_discord_presence = UISettings::values.enable_discord_presence.GetValue();
     const auto old_language_index = Settings::values.language_index.GetValue();
     const bool old_gamemode = UISettings::values.enable_gamemode.GetValue();
@@ -9494,6 +10058,16 @@ void MainWindow::OnConfigure() {
             &MainWindow::OnLanguageChanged);
     connect(&configure_dialog, &ConfigureDialog::ExternalContentDirsChanged, this,
             &MainWindow::OnGameListRefresh);
+    if (configure_start_category >= 0) {
+        if (auto* list = configure_dialog.findChild<QListWidget*>(QStringLiteral("selectorList"))) {
+            list->setCurrentRow(configure_start_category);
+        }
+        if (auto* tabs = configure_dialog.findChild<QTabWidget*>(QStringLiteral("tabWidget"))) {
+            tabs->setCurrentIndex(configure_start_tab);
+        }
+        configure_start_category = -1;
+        configure_start_tab = 0;
+    }
 
     const auto result = configure_dialog.exec();
     if (result != QDialog::Accepted && !UISettings::values.configuration_applied &&
@@ -9524,6 +10098,8 @@ void MainWindow::OnConfigure() {
         // so.
         QVector<UISettings::GameDir> old_game_dirs = std::move(UISettings::values.game_dirs);
         QVector<u64> old_favorited_ids = std::move(UISettings::values.favorited_ids);
+        QVector<u64> old_recently_played_ids =
+            std::move(UISettings::values.recently_played_ids);
 
         Settings::values.disabled_addons.clear();
 
@@ -9533,6 +10109,7 @@ void MainWindow::OnConfigure() {
 
         UISettings::values.game_dirs = std::move(old_game_dirs);
         UISettings::values.favorited_ids = std::move(old_favorited_ids);
+        UISettings::values.recently_played_ids = std::move(old_recently_played_ids);
 
         InitializeRecentFileMenuActions();
 
@@ -9545,7 +10122,8 @@ void MainWindow::OnConfigure() {
     ui->action_Show_Controller_Hints->setChecked(Settings::values.console_hints.GetValue());
     InitializeHotkeys();
 
-    if (UISettings::values.theme != old_theme) {
+    if (UISettings::values.theme != old_theme ||
+        UISettings::values.accent_color.GetValue() != old_accent) {
         UpdateUITheme();
     }
     if (UISettings::values.enable_discord_presence.GetValue() != old_discord_presence) {
@@ -10785,6 +11363,11 @@ void MainWindow::UpdateStatusBar() {
     }
 
     QString fpsText = tr("Game: %1 FPS").arg(std::round(results.average_game_fps), 0, 'f', 0);
+    if (const double shown_fps = VideoCore::FrameGeneration::OutputFps(); shown_fps > 0.5) {
+        fpsText += QStringLiteral(" ") +
+                   tr("(FG: %1)", "Frames shown per second with frame generation")
+                       .arg(std::round(shown_fps), 0, 'f', 0);
+    }
     if (!m_fpsSuffix.isEmpty())
         fpsText = fpsText % QStringLiteral(" (%1)").arg(m_fpsSuffix);
 
@@ -10803,13 +11386,15 @@ void MainWindow::UpdateStatusBar() {
     game_fps_label->setVisible(true);
     emu_frametime_label->setVisible(true);
     firmware_label->setVisible(false);
+    UpdateLsfgButton();
 }
 
 void MainWindow::UpdateGPUAccuracyButton() {
     const auto gpu_accuracy = Settings::values.gpu_accuracy.GetValue();
     const auto gpu_accuracy_text =
         ConfigurationShared::gpu_accuracy_texts_map.find(gpu_accuracy)->second;
-    gpu_accuracy_button->setText(gpu_accuracy_text.toUpper());
+    gpu_accuracy_button->setText(gpu_accuracy_text);
+    gpu_accuracy_button->setToolTip(tr("GPU accuracy - click to toggle, right click for all modes"));
     gpu_accuracy_button->setChecked(gpu_accuracy != Settings::GpuAccuracy::Low);
 }
 
@@ -10817,28 +11402,31 @@ void MainWindow::UpdateDockedButton() {
     const auto console_mode = Settings::values.use_docked_mode.GetValue();
     dock_status_button->setChecked(Settings::IsDockedMode());
     dock_status_button->setText(
-        ConfigurationShared::use_docked_mode_texts_map.find(console_mode)->second.toUpper());
+        ConfigurationShared::use_docked_mode_texts_map.find(console_mode)->second);
+    dock_status_button->setToolTip(tr("Console mode - click to toggle"));
 }
 
 void MainWindow::UpdateAPIText() {
     const auto api = Settings::values.renderer_backend.GetValue();
     const auto renderer_status_text =
         ConfigurationShared::renderer_backend_texts_map.find(api)->second;
-    renderer_status_button->setText(renderer_status_text.toUpper());
+    renderer_status_button->setText(renderer_status_text);
+    renderer_status_button->setChecked(api == Settings::RendererBackend::Vulkan);
+    renderer_status_button->setToolTip(tr("Graphics API - click to toggle"));
 }
 
 void MainWindow::UpdateFilterText() {
     const auto filter = Settings::values.scaling_filter.GetValue();
     const auto filter_text = ConfigurationShared::scaling_filter_texts_map.find(filter)->second;
-    filter_status_button->setText(filter_text.toUpper());
+    filter_status_button->setText(filter_text);
+    filter_status_button->setToolTip(tr("Window adapting filter - click to cycle, right click for all"));
 }
 
 void MainWindow::UpdateAAText() {
     const auto aa_mode = Settings::values.anti_aliasing.GetValue();
     const auto aa_text = ConfigurationShared::anti_aliasing_texts_map.find(aa_mode)->second;
-    aa_status_button->setText(aa_mode == Settings::AntiAliasing::None
-                                  ? QStringLiteral(QT_TRANSLATE_NOOP("MainWindow", "NO AA"))
-                                  : aa_text.toUpper());
+    aa_status_button->setText(aa_mode == Settings::AntiAliasing::None ? tr("No AA") : aa_text);
+    aa_status_button->setToolTip(tr("Anti-aliasing - click to cycle, right click for all"));
 }
 
 #ifdef HAS_RESHADE
@@ -10947,11 +11535,12 @@ void MainWindow::UpdateVolumeUI() {
     volume_slider->setValue(volume_value);
     if (Settings::values.audio_muted) {
         volume_button->setChecked(false);
-        volume_button->setText(tr("VOLUME: MUTE"));
+        volume_button->setText(tr("Muted"));
     } else {
         volume_button->setChecked(true);
-        volume_button->setText(tr("VOLUME: %1%", "Volume percentage (e.g. 50%)").arg(volume_value));
+        volume_button->setText(tr("%1%", "Volume percentage (e.g. 50%)").arg(volume_value));
     }
+    volume_button->setToolTip(tr("Volume - scroll or click to adjust, right click to mute"));
 }
 
 void MainWindow::UpdateStatusButtons() {
@@ -10964,6 +11553,7 @@ void MainWindow::UpdateStatusButtons() {
     UpdateAAText();
     UpdateFrameGenButton();
     UpdateVolumeUI();
+    UpdateLsfgButton();
 }
 
 // TODO(crueter): Use this for game list stuff
@@ -11314,9 +11904,11 @@ void MainWindow::UpdateUITheme() {
 
     if (current_theme.isEmpty())
         current_theme = default_theme;
+    const bool eden_only_theme = current_theme == QStringLiteral("amoled");
+    const QString icon_theme = eden_only_theme ? QStringLiteral("colorful_dark") : current_theme;
 
 #ifdef _WIN32
-    QIcon::setThemeName(current_theme);
+    QIcon::setThemeName(icon_theme);
     AdjustLinkColor();
 #else
     if (current_theme == QStringLiteral("default") || current_theme == QStringLiteral("colorful")) {
@@ -11326,13 +11918,13 @@ void MainWindow::UpdateUITheme() {
             current_theme = QStringLiteral("default_dark");
         }
     } else {
-        QIcon::setThemeName(current_theme);
+        QIcon::setThemeName(icon_theme);
         QIcon::setThemeSearchPaths(QStringList(QStringLiteral(":/icons")));
         AdjustLinkColor();
     }
 #endif
 
-    if (current_theme != default_theme) {
+    if (current_theme != default_theme && !eden_only_theme) {
         QString theme_uri{QStringLiteral(":%1/style.qss").arg(current_theme)};
         QFile f(theme_uri);
         if (!f.open(QFile::ReadOnly | QFile::Text)) {
@@ -11342,22 +11934,28 @@ void MainWindow::UpdateUITheme() {
         }
     }
 
-    QString theme_uri{QStringLiteral(":%1/style.qss").arg(current_theme)};
-    QFile f(theme_uri);
-    if (f.open(QFile::ReadOnly | QFile::Text)) {
-        QTextStream ts(&f);
-        qApp->setStyleSheet(ts.readAll());
-        setStyleSheet(ts.readAll());
+    Library::SetAccentColor(
+        QColor(QString::fromStdString(UISettings::values.accent_color.GetValue())));
+    Library::SetThemeName(current_theme);
+    const bool dark_ui = Library::CurrentTheme().dark;
+    QFile base_file(dark_ui ? QStringLiteral(":default_dark/style.qss")
+                            : QStringLiteral(":default/style.qss"));
+    QString base_style_sheet;
+    if (base_file.open(QFile::ReadOnly | QFile::Text)) {
+        base_style_sheet = QTextStream(&base_file).readAll();
     } else {
-        LOG_ERROR(Frontend, "Unable to set style \"{}\", stylesheet file not found",
-                  UISettings::values.theme);
-        qApp->setStyleSheet({});
-        setStyleSheet({});
+        LOG_ERROR(Frontend, "Unable to load the base style sheet");
+    }
+    EdenUi::ApplyTheme(current_theme, base_style_sheet);
+    setStyleSheet({});
+    UpdateStatusBarIcons();
+    if (top_bar) {
+        top_bar->update();
     }
 
 #ifdef _WIN32
     RemoveTitlebarFilter();
-    ApplyGlobalDarkTitlebar(UISettings::IsDarkTheme());
+    ApplyGlobalDarkTitlebar(dark_ui);
 #endif
 }
 

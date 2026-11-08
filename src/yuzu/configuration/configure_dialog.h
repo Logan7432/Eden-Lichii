@@ -27,6 +27,7 @@ class ConfigureGeneral;
 class ConfigureGraphics;
 class ConfigureGraphicsAdvanced;
 class ConfigureGraphicsExtensions;
+class ConfigureGraphicsFrameGen;
 class ConfigureHotkeys;
 class ConfigureInput;
 class ConfigureProfileManager;
@@ -43,6 +44,10 @@ class InputSubsystem;
 
 namespace Ui {
 class ConfigureDialog;
+}
+
+namespace EdenUi {
+class PageHeader;
 }
 
 class ConfigureDialog : public QDialog {
@@ -92,6 +97,8 @@ private:
     std::unique_ptr<ConfigureGeneral> general_tab;
     std::unique_ptr<ConfigureGraphicsAdvanced> graphics_advanced_tab;
     std::unique_ptr<ConfigureGraphicsExtensions> graphics_extensions_tab;
+    std::unique_ptr<ConfigureGraphicsFrameGen> graphics_frame_gen_tab;
+    EdenUi::PageHeader* page_header{};
     std::unique_ptr<ConfigureUi> ui_tab;
     std::unique_ptr<ConfigureGraphics> graphics_tab;
     std::unique_ptr<ConfigureHotkeys> hotkeys_tab;

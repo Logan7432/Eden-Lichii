@@ -163,6 +163,29 @@ void GetMetadataFromControlNCA(const FileSys::PatchManager& patch_manager, const
         });
 }
 
+struct ExtraMetadata {
+    QString developer;
+    QString version;
+};
+
+ExtraMetadata ParseExtraMetadata(const QString& cached) {
+    const QStringList parts = cached.split(QLatin1Char('\n'));
+    return {parts.value(0).trimmed(), parts.value(1).trimmed()};
+}
+
+QString SerializeExtraMetadata(const FileSys::NACP& nacp) {
+    return QStringLiteral("%1\n%2").arg(QString::fromStdString(nacp.GetDeveloperName()),
+                                         QString::fromStdString(nacp.GetVersionString()));
+}
+
+ExtraMetadata ReadExtraMetadata(Loader::AppLoader& loader) {
+    FileSys::NACP nacp;
+    if (loader.ReadControlData(nacp) != Loader::ResultStatus::Success) {
+        return {};
+    }
+    return ParseExtraMetadata(SerializeExtraMetadata(nacp));
+}
+
 bool HasSupportedFileExtension(const std::string& file_name) {
     const QFileInfo file = QFileInfo(QString::fromStdString(file_name));
     return QtCommon::supported_file_extensions.contains(file.suffix(), Qt::CaseInsensitive);
@@ -263,7 +286,8 @@ QList<QStandardItem*> MakeGameListEntry(const std::string& path, const std::stri
                                         const std::size_t size, const std::vector<u8>& icon,
                                         Loader::AppLoader& loader, u64 program_id,
                                         const PlayTime::PlayTimeManager& play_time_manager,
-                                        const FileSys::PatchManager& patch) {
+                                        const FileSys::PatchManager& patch,
+                                        const ExtraMetadata& extra = {}) {
     auto const file_type = loader.GetFileType();
     auto const file_type_string = QString::fromStdString(Loader::GetFileTypeString(file_type));
 
@@ -288,7 +312,8 @@ QList<QStandardItem*> MakeGameListEntry(const std::string& path, const std::stri
     u64 play_time = play_time_manager.GetPlayTime(program_id);
     return QList<QStandardItem*>{
         new GameListItemPath(FormatGameName(path), icon, QString::fromStdString(name),
-                             file_type_string, program_id, play_time, patch_versions),
+                             file_type_string, program_id, play_time, patch_versions,
+                             extra.developer, extra.version),
         new GameListItem(file_type_string),
         new GameListItemSize(size),
         new GameListItemPlayTime(play_time),
@@ -400,12 +425,18 @@ void GameListWorker::AddTitlesToGameList(GameListDir* parent_dir, GameListItemTy
                                  system.GetContentProvider()};
         LOG_INFO(Frontend, "PatchManager initiated for id {:X}", program_id);
         const auto control = cache.GetEntry(game.title_id, ContentRecordType::Control);
+        ExtraMetadata extra;
         if (control != nullptr) {
             GetMetadataFromControlNCA(patch, *control, icon, name);
+            extra = ParseExtraMetadata(GetGameListCachedObject(
+                fmt::format("{:016X}", patch.GetTitleID()), "meta.txt", [&patch, &control] {
+                    const auto [nacp, icon_file] = patch.ParseControlNCA(*control);
+                    return nacp != nullptr ? SerializeExtraMetadata(*nacp) : QString{};
+                }));
         }
 
         auto entry = MakeGameListEntry(file->GetFullPath(), name, file->GetSize(), icon, *loader,
-                                       program_id, play_time_manager, patch);
+                                       program_id, play_time_manager, patch, extra);
         auto pending = std::make_shared<PendingRow>(std::move(entry));
         RecordEvent([=](GameListModel* model) { model->AddEntry(pending->Release(), parent_dir); });
     }
@@ -480,7 +511,8 @@ void GameListWorker::ScanFileSystem(ScanTarget target, const std::vector<std::fi
                 const u64 size = loose_dump ? 0 : Common::FS::GetSize(physical_name);
 
                 auto entry = MakeGameListEntry(physical_name, name, size, icon, *app_loader, id,
-                                               play_time_manager, patch);
+                                               play_time_manager, patch,
+                                               ReadExtraMetadata(*app_loader));
 
                 if (loose_dump) {
                     entry[GameListModel::COLUMN_SIZE]->setText(tr("Not scanned"));

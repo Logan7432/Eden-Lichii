@@ -14,6 +14,8 @@
 #include "common/container/unordered_set.h"
 #include "network/network.h"
 
+class QTreeView;
+
 namespace Ui {
 class ChatRoom;
 }
@@ -42,6 +44,11 @@ public:
     void SetModPerms(bool is_mod);
     void UpdateIconDisplay();
 
+    QTreeView* DetachMemberList();
+    void OpenMemberMenu();
+    void ScrollHistory(int steps);
+    void FocusInput();
+
 public slots:
     void OnRoomUpdate(const Network::RoomInformation& info);
     void OnChatReceive(const Network::ChatEntry&);
@@ -56,18 +63,22 @@ signals:
     void ChatReceived(const Network::ChatEntry&);
     void StatusMessageReceived(const Network::StatusMessageEntry&);
     void UserPinged();
+    void MessageShown();
 
 private:
     static constexpr u32 max_chat_lines = 1000;
     void AppendChatMessage(const QString&);
     bool ValidateMessage(const std::string&);
     void SendModerationRequest(Network::RoomMessageTypes type, const std::string& nickname);
+    void ApplyTexts();
 
     bool has_mod_perms = false;
     QStandardItemModel* player_list;
     std::unique_ptr<Ui::ChatRoom> ui;
     ::Common::unordered_set<std::string> block_list;
     ::Common::unordered_map<std::string, QPixmap> icon_cache;
+    Network::RoomMember::CallbackHandle<Network::ChatEntry> chat_handle;
+    Network::RoomMember::CallbackHandle<Network::StatusMessageEntry> status_handle;
 };
 
 Q_DECLARE_METATYPE(Network::ChatEntry);

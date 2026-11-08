@@ -80,16 +80,25 @@ public:
     static constexpr int FullPathRole = SortRole + 2;
     static constexpr int ProgramIdRole = SortRole + 3;
     static constexpr int FileTypeRole = SortRole + 4;
+    static constexpr int IconDataRole = SortRole + 5;
+    static constexpr int DeveloperRole = SortRole + 6;
+    static constexpr int BaseVersionRole = SortRole + 7;
 
     GameListItemPath() = default;
     GameListItemPath(const QString& game_path, const std::vector<u8>& picture_data,
                      const QString& game_name, const QString& game_type, u64 program_id,
-                     u64 play_time, const QString& patch_versions) {
+                     u64 play_time, const QString& patch_versions, const QString& developer = {},
+                     const QString& base_version = {}) {
         setData(type(), TypeRole);
         setData(game_path, FullPathRole);
         setData(game_name, TitleRole);
         setData(qulonglong(program_id), ProgramIdRole);
         setData(game_type, FileTypeRole);
+        setData(developer, DeveloperRole);
+        setData(base_version, BaseVersionRole);
+        setData(QByteArray(reinterpret_cast<const char*>(picture_data.data()),
+                           static_cast<qsizetype>(picture_data.size())),
+                IconDataRole);
 
         const auto readable_play_time =
             play_time > 0 ? QObject::tr("Play Time: %1")
@@ -97,15 +106,10 @@ public:
                                     PlayTime::PlayTimeManager::GetReadablePlayTime(play_time)))
                           : QObject::tr("Never Played");
 
-        const auto enabled_update = [patch_versions]() -> QString {
-            const QStringList lines = patch_versions.split(QLatin1Char('\n'));
-            const QRegularExpression regex{QStringLiteral(R"(^Update \(([0-9\.]+)\))")};
-            for (const QString& line : std::as_const(lines)) {
-                const auto match = regex.match(line);
-                if (match.hasMatch() && match.hasCaptured(1))
-                    return QObject::tr("Version: %1").arg(match.captured(1));
-            }
-            return QObject::tr("Version: 1.0.0");
+        const auto enabled_update = [&patch_versions, &base_version]() -> QString {
+            const QString version = ActiveVersion(patch_versions, base_version);
+            return QObject::tr("Version: %1")
+                .arg(version.isEmpty() ? QStringLiteral("1.0.0") : version);
         }();
 
         const auto tooltip = QStringLiteral("%1\n%2").arg(readable_play_time, enabled_update);
@@ -125,6 +129,18 @@ public:
 
     int type() const override {
         return static_cast<int>(GameListItemType::Game);
+    }
+
+    static QString ActiveVersion(const QString& patch_versions, const QString& base_version) {
+        static const QRegularExpression regex{QStringLiteral(R"(^Update \(([0-9\.]+)\))")};
+        const QStringList lines = patch_versions.split(QLatin1Char('\n'));
+        for (const QString& line : lines) {
+            const auto match = regex.match(line);
+            if (match.hasMatch() && match.hasCaptured(1)) {
+                return match.captured(1);
+            }
+        }
+        return base_version;
     }
 
     QVariant data(int role) const override {
@@ -176,6 +192,31 @@ public:
     }
 };
 
+struct CompatStatus {
+    QString color;
+    const char* text;
+    const char* tooltip;
+};
+
+inline const CompatStatus* FindCompatStatus(const QString& compatibility) {
+    // clang-format off
+    static const CompatStatus ingame_status =
+                   CompatStatus{QStringLiteral("#f2d624"), QT_TRANSLATE_NOOP("GameListItemCompat", "Ingame"),     QT_TRANSLATE_NOOP("GameListItemCompat", "Game starts, but crashes or major glitches prevent it from being completed.")};
+    static const std::map<QString, CompatStatus> status_data = {
+        {QStringLiteral("0"),  {QStringLiteral("#5c93ed"), QT_TRANSLATE_NOOP("GameListItemCompat", "Perfect"),    QT_TRANSLATE_NOOP("GameListItemCompat", "Game can be played without issues.")}},
+        {QStringLiteral("1"),  {QStringLiteral("#47d35c"), QT_TRANSLATE_NOOP("GameListItemCompat", "Playable"),   QT_TRANSLATE_NOOP("GameListItemCompat", "Game functions with minor graphical or audio glitches and is playable from start to finish.")}},
+        {QStringLiteral("2"),  ingame_status},
+        {QStringLiteral("3"),  ingame_status}, // Fallback for the removed "Okay" category
+        {QStringLiteral("4"),  {QStringLiteral("#FF0000"), QT_TRANSLATE_NOOP("GameListItemCompat", "Intro/Menu"), QT_TRANSLATE_NOOP("GameListItemCompat", "Game loads, but is unable to progress past the Start Screen.")}},
+        {QStringLiteral("5"),  {QStringLiteral("#828282"), QT_TRANSLATE_NOOP("GameListItemCompat", "Won't Boot"), QT_TRANSLATE_NOOP("GameListItemCompat", "The game crashes when attempting to startup.")}},
+        {QStringLiteral("99"), {QStringLiteral("#000000"), QT_TRANSLATE_NOOP("GameListItemCompat", "Not Tested"), QT_TRANSLATE_NOOP("GameListItemCompat", "The game has not yet been tested.")}},
+    };
+    // clang-format on
+
+    const auto iterator = status_data.find(compatibility);
+    return iterator == status_data.end() ? nullptr : &iterator->second;
+}
+
 class GameListItemCompat : public GameListItem {
     Q_DECLARE_TR_FUNCTIONS(GameListItemCompat)
 public:
@@ -184,35 +225,15 @@ public:
     explicit GameListItemCompat(const QString& compatibility) {
         setData(type(), TypeRole);
 
-        struct CompatStatus {
-            QString color;
-            const char* text;
-            const char* tooltip;
-        };
-        // clang-format off
-        const auto ingame_status =
-                       CompatStatus{QStringLiteral("#f2d624"), QT_TR_NOOP("Ingame"),     QT_TR_NOOP("Game starts, but crashes or major glitches prevent it from being completed.")};
-        static const std::map<QString, CompatStatus> status_data = {
-            {QStringLiteral("0"),  {QStringLiteral("#5c93ed"), QT_TR_NOOP("Perfect"),    QT_TR_NOOP("Game can be played without issues.")}},
-            {QStringLiteral("1"),  {QStringLiteral("#47d35c"), QT_TR_NOOP("Playable"),   QT_TR_NOOP("Game functions with minor graphical or audio glitches and is playable from start to finish.")}},
-            {QStringLiteral("2"),  ingame_status},
-            {QStringLiteral("3"),  ingame_status}, // Fallback for the removed "Okay" category
-            {QStringLiteral("4"),  {QStringLiteral("#FF0000"), QT_TR_NOOP("Intro/Menu"), QT_TR_NOOP("Game loads, but is unable to progress past the Start Screen.")}},
-            {QStringLiteral("5"),  {QStringLiteral("#828282"), QT_TR_NOOP("Won't Boot"), QT_TR_NOOP("The game crashes when attempting to startup.")}},
-            {QStringLiteral("99"), {QStringLiteral("#000000"), QT_TR_NOOP("Not Tested"), QT_TR_NOOP("The game has not yet been tested.")}},
-        };
-        // clang-format on
-
-        auto iterator = status_data.find(compatibility);
-        if (iterator == status_data.end()) {
+        const CompatStatus* status = FindCompatStatus(compatibility);
+        if (status == nullptr) {
             LOG_WARNING(Frontend, "Invalid compatibility number {}", compatibility.toStdString());
             return;
         }
-        const CompatStatus& status = iterator->second;
         setData(compatibility, CompatNumberRole);
-        setText(tr(status.text));
-        setToolTip(tr(status.tooltip));
-        setData(QtCommon::CreateCirclePixmapFromColor(status.color), Qt::DecorationRole);
+        setText(tr(status->text));
+        setToolTip(tr(status->tooltip));
+        setData(QtCommon::CreateCirclePixmapFromColor(status->color), Qt::DecorationRole);
     }
 
     int type() const override {

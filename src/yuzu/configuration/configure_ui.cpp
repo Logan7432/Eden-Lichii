@@ -3,17 +3,25 @@
 
 #include "yuzu/configuration/configure_ui.h"
 
+#include <algorithm>
 #include <array>
 #include <cstdlib>
 #include <set>
 #include <string>
 #include <utility>
 
+#include <QAbstractButton>
+#include <QButtonGroup>
 #include <QCheckBox>
+#include <QColorDialog>
 #include <QComboBox>
+#include <QConicalGradient>
 #include <QCoreApplication>
 #include <QDirIterator>
 #include <QFileDialog>
+#include <QHBoxLayout>
+#include <QLabel>
+#include <QPainter>
 #include <QString>
 #include <QToolButton>
 #include <QVariant>
@@ -28,6 +36,7 @@
 
 #include "qt_common/config/uisettings.h"
 #include "qt_common/qt_compat.h"
+#include "yuzu/game/library/library_theme.h"
 
 namespace {
 
@@ -47,6 +56,101 @@ constexpr std::array row_text_names{
     QT_TRANSLATE_NOOP("ConfigureUI", "None"),
 };
 // clang-format on
+
+struct AccentPreset {
+    const char* name;
+    const char* color;
+};
+
+constexpr std::array accent_presets{
+    AccentPreset{QT_TRANSLATE_NOOP("ConfigureUI", "Theme default"), nullptr},
+    AccentPreset{QT_TRANSLATE_NOOP("ConfigureUI", "Blue"), "#3b82f6"},
+    AccentPreset{QT_TRANSLATE_NOOP("ConfigureUI", "Sky"), "#38bdf8"},
+    AccentPreset{QT_TRANSLATE_NOOP("ConfigureUI", "Teal"), "#2dd4bf"},
+    AccentPreset{QT_TRANSLATE_NOOP("ConfigureUI", "Green"), "#4ade80"},
+    AccentPreset{QT_TRANSLATE_NOOP("ConfigureUI", "Lime"), "#a3e635"},
+    AccentPreset{QT_TRANSLATE_NOOP("ConfigureUI", "Amber"), "#fbbf24"},
+    AccentPreset{QT_TRANSLATE_NOOP("ConfigureUI", "Orange"), "#fb923c"},
+    AccentPreset{QT_TRANSLATE_NOOP("ConfigureUI", "Neon red"), "#e60012"},
+    AccentPreset{QT_TRANSLATE_NOOP("ConfigureUI", "Rose"), "#fb7185"},
+    AccentPreset{QT_TRANSLATE_NOOP("ConfigureUI", "Pink"), "#f472b6"},
+    AccentPreset{QT_TRANSLATE_NOOP("ConfigureUI", "Purple"), "#a78bfa"},
+};
+
+bool IsPresetAccent(const QString& value) {
+    return std::any_of(accent_presets.begin(), accent_presets.end(), [&value](const auto& preset) {
+        return preset.color && value.compare(QLatin1String(preset.color), Qt::CaseInsensitive) == 0;
+    });
+}
+
+class AccentSwatch : public QAbstractButton {
+public:
+    enum class Kind { Default, Preset, Custom };
+
+    explicit AccentSwatch(Kind kind_, QWidget* parent) : QAbstractButton(parent), kind{kind_} {
+        setCheckable(true);
+        setFocusPolicy(Qt::StrongFocus);
+        setCursor(Qt::PointingHandCursor);
+        setAttribute(Qt::WA_Hover);
+        setFixedSize(sizeHint());
+    }
+
+    void SetColor(const QColor& new_color) {
+        color = new_color;
+        update();
+    }
+
+    QSize sizeHint() const override {
+        return QSize(34, 34);
+    }
+
+protected:
+    void paintEvent(QPaintEvent*) override {
+        const Library::Theme& t = Library::CurrentTheme();
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+        const QRectF area = QRectF(rect()).adjusted(1.5, 1.5, -1.5, -1.5);
+
+        if (isChecked() || underMouse()) {
+            painter.setPen(QPen(isChecked() ? t.text : Library::WithAlpha(t.text, 0.35),
+                                isChecked() ? 2.0 : 1.5));
+            painter.setBrush(Qt::NoBrush);
+            painter.drawEllipse(area);
+        }
+
+        QRectF dot = area.adjusted(5, 5, -5, -5);
+        if (kind == Kind::Custom) {
+            QConicalGradient rainbow(dot.center(), 90);
+            for (int i = 0; i <= 6; ++i) {
+                rainbow.setColorAt(i / 6.0, QColor::fromHsvF((i % 6) / 6.0f, 0.70f, 1.0f));
+            }
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(rainbow);
+            painter.drawEllipse(dot);
+            dot = dot.adjusted(4, 4, -4, -4);
+        }
+        const QColor fill = color.isValid() ? color : t.control;
+        painter.setPen(QPen(Library::WithAlpha(t.text, 0.14), 1.0));
+        painter.setBrush(fill);
+        painter.drawEllipse(dot);
+
+        const QColor ink = fill.lightnessF() > 0.6 ? QColor(0x0B, 0x0C, 0x0E) : QColor(Qt::white);
+        if (kind == Kind::Default) {
+            painter.setFont(Library::UiFont(11, QFont::Bold));
+            painter.setPen(ink);
+            painter.drawText(dot, Qt::AlignCenter, QStringLiteral("A"));
+        } else if (kind == Kind::Custom && !color.isValid()) {
+            painter.setPen(QPen(t.text_dim, 1.6, Qt::SolidLine, Qt::RoundCap));
+            const QPointF c = dot.center();
+            painter.drawLine(QPointF(c.x() - 3.5, c.y()), QPointF(c.x() + 3.5, c.y()));
+            painter.drawLine(QPointF(c.x(), c.y() - 3.5), QPointF(c.x(), c.y() + 3.5));
+        }
+    }
+
+private:
+    Kind kind;
+    QColor color;
+};
 
 QString GetTranslatedFolderIconSize(size_t index) {
     return QCoreApplication::translate("ConfigureUI", default_folder_icon_sizes[index].second);
@@ -99,6 +203,7 @@ ConfigureUi::ConfigureUi(Core::System& system_, QWidget* parent)
         ui->theme_combobox->addItem(QString::fromUtf8(theme.first),
                                     QString::fromUtf8(theme.second));
     }
+    SetupAccentPicker();
 
     InitializeIconSizeComboBox();
     InitializeRowComboBoxes();
@@ -151,6 +256,7 @@ ConfigureUi::~ConfigureUi() = default;
 void ConfigureUi::ApplyConfiguration() {
     UISettings::values.theme =
         ui->theme_combobox->itemData(ui->theme_combobox->currentIndex()).toString().toStdString();
+    UISettings::values.accent_color = accent_value.toStdString();
     UISettings::values.show_add_ons = ui->show_add_ons->isChecked();
     UISettings::values.show_size = ui->show_size->isChecked();
     UISettings::values.show_types = ui->show_types->isChecked();
@@ -177,6 +283,13 @@ void ConfigureUi::RequestGameListUpdate() {
 void ConfigureUi::SetConfiguration() {
     ui->theme_combobox->setCurrentIndex(
         ui->theme_combobox->findData(QString::fromStdString(UISettings::values.theme)));
+    accent_value = QString::fromStdString(UISettings::values.accent_color.GetValue());
+    if (!QColor(accent_value).isValid()) {
+        accent_value.clear();
+    }
+    custom_accent =
+        accent_value.isEmpty() || IsPresetAccent(accent_value) ? QColor{} : QColor(accent_value);
+    UpdateAccentPicker();
     ui->language_combobox->setCurrentIndex(ui->language_combobox->findData(
         QString::fromStdString(UISettings::values.language.GetValue())));
     ui->show_add_ons->setChecked(UISettings::values.show_add_ons.GetValue());
@@ -209,6 +322,7 @@ void ConfigureUi::changeEvent(QEvent* event) {
 
 void ConfigureUi::RetranslateUI() {
     ui->retranslateUi(this);
+    UpdateAccentPicker();
 
     for (int i = 0; i < ui->folder_icon_size_combobox->count(); i++) {
         ui->folder_icon_size_combobox->setItemText(
@@ -221,6 +335,99 @@ void ConfigureUi::RetranslateUI() {
         ui->row_1_text_combobox->setItemText(i, name);
         ui->row_2_text_combobox->setItemText(i, name);
     }
+}
+
+void ConfigureUi::SetupAccentPicker() {
+    auto* row = new QHBoxLayout;
+    accent_label = new QLabel(ui->general_groupBox);
+    row->addWidget(accent_label);
+    row->addSpacing(8);
+
+    accent_group = new QButtonGroup(this);
+    accent_group->setExclusive(true);
+    auto* swatches = new QHBoxLayout;
+    swatches->setSpacing(2);
+    for (std::size_t i = 0; i < accent_presets.size(); ++i) {
+        const auto& preset = accent_presets[i];
+        auto* swatch = new AccentSwatch(preset.color ? AccentSwatch::Kind::Preset
+                                                     : AccentSwatch::Kind::Default,
+                                        ui->general_groupBox);
+        if (preset.color) {
+            swatch->SetColor(QColor(QLatin1String(preset.color)));
+        }
+        accent_group->addButton(swatch, static_cast<int>(i));
+        accent_swatches << swatch;
+        swatches->addWidget(swatch);
+    }
+    auto* custom = new AccentSwatch(AccentSwatch::Kind::Custom, ui->general_groupBox);
+    accent_group->addButton(custom, static_cast<int>(accent_presets.size()));
+    accent_swatches << custom;
+    swatches->addWidget(custom);
+    row->addLayout(swatches);
+    row->addSpacing(10);
+
+    accent_name = new QLabel(ui->general_groupBox);
+    accent_name->setObjectName(QStringLiteral("EdenPageSubtitle"));
+    row->addWidget(accent_name);
+    row->addStretch(1);
+    ui->verticalLayout_2->addLayout(row);
+
+    connect(accent_group, &QButtonGroup::idClicked, this, &ConfigureUi::OnAccentClicked);
+    connect(ui->theme_combobox, qOverload<int>(&QComboBox::currentIndexChanged), this,
+            [this] { UpdateAccentPicker(); });
+}
+
+void ConfigureUi::OnAccentClicked(int index) {
+    if (index < static_cast<int>(accent_presets.size())) {
+        const char* color = accent_presets[static_cast<std::size_t>(index)].color;
+        accent_value = color ? QString::fromLatin1(color) : QString{};
+    } else {
+        QColor initial = custom_accent;
+        if (!initial.isValid()) {
+            initial = QColor(accent_value).isValid() ? QColor(accent_value)
+                                                     : Library::CurrentTheme().accent;
+        }
+        const QColor picked = QColorDialog::getColor(initial, this, tr("Custom Accent Color"));
+        if (picked.isValid()) {
+            custom_accent = picked;
+            accent_value = picked.name(QColor::HexRgb);
+        }
+    }
+    UpdateAccentPicker();
+}
+
+void ConfigureUi::UpdateAccentPicker() {
+    if (!accent_group || accent_swatches.isEmpty()) {
+        return;
+    }
+    accent_label->setText(tr("Accent color"));
+    accent_label->setToolTip(tr("Color of the selection ring, the play button, the frame around "
+                                "the selected game and the other highlights of the interface."));
+
+    const QString theme_id = ui->theme_combobox->currentData().toString();
+    static_cast<AccentSwatch*>(accent_swatches.front())->SetColor(Library::ThemeAccent(theme_id));
+    static_cast<AccentSwatch*>(accent_swatches.back())->SetColor(custom_accent);
+
+    int checked = static_cast<int>(accent_presets.size());
+    QString name = tr("Custom (%1)").arg(accent_value.toUpper());
+    for (std::size_t i = 0; i < accent_presets.size(); ++i) {
+        const auto& preset = accent_presets[i];
+        const bool match = preset.color ? accent_value.compare(QLatin1String(preset.color),
+                                                               Qt::CaseInsensitive) == 0
+                                        : accent_value.isEmpty();
+        if (match) {
+            checked = static_cast<int>(i);
+            name = QCoreApplication::translate("ConfigureUI", preset.name);
+            break;
+        }
+    }
+    for (std::size_t i = 0; i < accent_presets.size(); ++i) {
+        accent_swatches[static_cast<int>(i)]->setToolTip(
+            QCoreApplication::translate("ConfigureUI", accent_presets[i].name));
+    }
+    accent_swatches.back()->setToolTip(tr("Pick a custom color..."));
+    accent_swatches[checked]->setChecked(true);
+    accent_name->setText(name);
 }
 
 void ConfigureUi::InitializeLanguageComboBox() {

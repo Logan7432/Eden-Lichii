@@ -17,7 +17,6 @@
 #include "qt_common/config/uisettings.h"
 #include "ui_direct_connect.h"
 #include "yuzu/main_window.h"
-#include "yuzu/multiplayer/client_room.h"
 #include "yuzu/multiplayer/direct_connect.h"
 #include "yuzu/multiplayer/message.h"
 #include "yuzu/multiplayer/profile_name.h"

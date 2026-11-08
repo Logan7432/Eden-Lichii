@@ -106,7 +106,13 @@ public:
     QDateTimeEdit* date_time_edit{};
     std::vector<std::pair<u32, QRadioButton*>> radio_buttons{};
 
+protected:
+    void mousePressEvent(QMouseEvent* event) override;
+    void mouseReleaseEvent(QMouseEvent* event) override;
+
 private:
+    bool switch_row = false;
+
     void SetupComponent(const QString& label, std::function<void()>& load_func, bool managed,
                         RequestType request, float multiplier,
                         Settings::BasicSetting* other_setting, const QString& suffix);

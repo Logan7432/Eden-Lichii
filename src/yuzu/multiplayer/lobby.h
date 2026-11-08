@@ -15,15 +15,36 @@
 #include "network/network.h"
 #include "yuzu/multiplayer/validation.h"
 
-namespace Ui {
-class Lobby;
-}
+class QAction;
+class QLineEdit;
+class QListView;
+class QPushButton;
+class QStackedWidget;
+class QTreeView;
+class QVariantAnimation;
 
+class ChatRoom;
 class LobbyModel;
 class LobbyFilterProxyModel;
 
 namespace Core {
 class System;
+}
+
+namespace EdenUi {
+class PageHeader;
+}
+
+namespace Library {
+class HintBar;
+class SegmentedControl;
+}
+
+namespace LobbyUi {
+class GlyphBadge;
+class RoomDetails;
+class RoomListView;
+class RoomPlaceholder;
 }
 
 /**
@@ -34,6 +55,8 @@ class Lobby : public QDialog {
     Q_OBJECT
 
 public:
+    enum class Page { Browse, Room };
+
     explicit Lobby(QWidget* parent, QStandardItemModel* list,
                    std::shared_ptr<Core::AnnounceMultiplayerSession> session,
                    Core::System& system_);
@@ -45,6 +68,11 @@ public:
      */
     void UpdateGameList(QStandardItemModel* list);
     void RetranslateUi();
+
+    void ShowPage(Page page);
+    Page CurrentPage() const;
+    bool IsRoomInView() const;
+    void UpdateThemedIcons();
 
 public slots:
     /**
@@ -60,14 +88,6 @@ private slots:
     void OnRefreshLobby();
 
     /**
-     * Handler for single clicking on a room in the list. Expands the treeitem to show player
-     * information for the people in the room
-     *
-     * index - The row of the proxy model that the user wants to join.
-     */
-    void OnExpandRoom(const QModelIndex&);
-
-    /**
      * Handler for double clicking on a room in the list. Gathers the host ip and port and attempts
      * to connect. Will also prompt for a password in case one is required.
      *
@@ -75,9 +95,20 @@ private slots:
      */
     void OnJoinRoom(const QModelIndex&);
 
+    void OnRoomStateChanged(const Network::RoomMember::State& state);
+    void OnRoomInformationChanged(const Network::RoomInformation& info);
+
 signals:
     void StateChanged(const Network::RoomMember::State&);
+    void RoomInformationChanged(const Network::RoomInformation&);
     void SaveConfig();
+    void UserPinged();
+    void RoomViewed();
+    void LeaveRoomRequested();
+
+protected:
+    void showEvent(QShowEvent* event) override;
+    void changeEvent(QEvent* event) override;
 
 private:
     std::string GetProfileUsername();
@@ -93,7 +124,59 @@ private:
      */
     QString PasswordPrompt();
 
-    std::unique_ptr<Ui::Lobby> ui;
+    void BuildUi();
+    void UpdateSelection();
+    void UpdateSummary();
+    void UpdateEmptyText();
+    void UpdateIcons();
+    void UpdateHints();
+    void UpdateTabs();
+    void UpdateRoomView();
+    void OnPageChanged();
+    void FocusPage();
+    void SwitchPage(int delta);
+    void MarkRoomViewed();
+    void OpenModeration();
+    void SetRefreshing(bool refreshing);
+    void JoinSelected();
+
+    EdenUi::PageHeader* header{};
+    QWidget* browse_tools{};
+    QLineEdit* nickname{};
+    QLineEdit* search{};
+    QAction* nickname_icon{};
+    QAction* search_icon{};
+    QPushButton* refresh_list{};
+    QWidget* room_tools{};
+    QPushButton* moderation_button{};
+    QPushButton* leave_button{};
+    LobbyUi::GlyphBadge* tab_prev{};
+    Library::SegmentedControl* tabs{};
+    LobbyUi::GlyphBadge* tab_next{};
+    QWidget* chips_row{};
+    QPushButton* games_owned{};
+    QPushButton* hide_empty{};
+    QPushButton* hide_full{};
+    QStackedWidget* pages{};
+    LobbyUi::RoomListView* room_list{};
+    LobbyUi::RoomDetails* details{};
+    QPushButton* join_button{};
+    QStackedWidget* room_stack{};
+    LobbyUi::RoomPlaceholder* room_placeholder{};
+    ChatRoom* chat{};
+    QTreeView* member_list{};
+    LobbyUi::RoomDetails* room_details{};
+    Library::HintBar* hint_bar{};
+    QVariantAnimation* refresh_spin{};
+    bool refreshing = false;
+
+    bool in_room = false;
+    bool joining = false;
+    bool is_moderator = false;
+    int unread = 0;
+    QString room_name;
+    Network::RoomMember::CallbackHandle<Network::RoomMember::State> room_state_handle;
+    Network::RoomMember::CallbackHandle<Network::RoomInformation> room_info_handle;
 
     QStandardItemModel* model{};
     QStandardItemModel* game_list{};

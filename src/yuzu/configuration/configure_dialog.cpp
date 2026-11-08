@@ -4,7 +4,12 @@
 // SPDX-FileCopyrightText: 2016 Citra Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
+#include <array>
+#include <initializer_list>
 #include <memory>
+#include <QScreen>
+#include <QVBoxLayout>
 #include "common/logging.h"
 #include "common/settings.h"
 #include "common/settings_enums.h"
@@ -22,6 +27,7 @@
 #include "yuzu/configuration/configure_graphics.h"
 #include "yuzu/configuration/configure_graphics_advanced.h"
 #include "yuzu/configuration/configure_graphics_extensions.h"
+#include "yuzu/configuration/configure_graphics_frame_gen.h"
 #include "yuzu/configuration/configure_hotkeys.h"
 #include "yuzu/configuration/configure_input.h"
 #include "yuzu/configuration/configure_input_player.h"
@@ -31,6 +37,8 @@
 #include "yuzu/configuration/configure_ui.h"
 #include "yuzu/configuration/configure_web.h"
 #include "yuzu/hotkeys.h"
+#include "yuzu/ui/dialog_navigator.h"
+#include "yuzu/ui/settings_chrome.h"
 
 ConfigureDialog::ConfigureDialog(QWidget* parent, HotkeyRegistry& registry_,
                                  InputCommon::InputSubsystem* input_subsystem,
@@ -49,6 +57,8 @@ ConfigureDialog::ConfigureDialog(QWidget* parent, HotkeyRegistry& registry_,
           std::make_unique<ConfigureGraphicsAdvanced>(system_, nullptr, *builder, this)},
       graphics_extensions_tab{
           std::make_unique<ConfigureGraphicsExtensions>(system_, nullptr, *builder, this)},
+      graphics_frame_gen_tab{
+          std::make_unique<ConfigureGraphicsFrameGen>(system_, nullptr, *builder, this)},
       ui_tab{std::make_unique<ConfigureUi>(system_, this)},
       graphics_tab{std::make_unique<ConfigureGraphics>(
           system_, vk_device_records, [&]() { graphics_advanced_tab->ExposeComputeOption(); },
@@ -75,6 +85,7 @@ ConfigureDialog::ConfigureDialog(QWidget* parent, HotkeyRegistry& registry_,
     ui->tabWidget->addTab(graphics_tab.get(), tr("Graphics"));
     ui->tabWidget->addTab(graphics_advanced_tab.get(), tr("GraphicsAdvanced"));
     ui->tabWidget->addTab(graphics_extensions_tab.get(), tr("GraphicsExtra"));
+    ui->tabWidget->addTab(graphics_frame_gen_tab.get(), tr("Frame Gen"));
     ui->tabWidget->addTab(hotkeys_tab.get(), tr("Hotkeys"));
     ui->tabWidget->addTab(input_tab.get(), tr("Controls"));
     ui->tabWidget->addTab(profile_tab.get(), tr("Profiles"));
@@ -110,7 +121,41 @@ ConfigureDialog::ConfigureDialog(QWidget* parent, HotkeyRegistry& registry_,
                 &ConfigureDialog::HandleApplyButtonClicked);
     }
 
-    adjustSize();
+    ui->horizontalLayout->removeWidget(ui->selectorList);
+    ui->horizontalLayout->removeWidget(ui->tabWidget);
+    EdenUi::DecorateSidebar(ui->selectorList);
+    ui->horizontalLayout->addWidget(
+        EdenUi::CreateSidebarPanel(ui->selectorList, tr("Settings"), this));
+    auto* content = new QVBoxLayout;
+    content->setContentsMargins(0, 2, 0, 0);
+    content->setSpacing(10);
+    page_header = new EdenUi::PageHeader(this);
+    content->addWidget(page_header);
+    content->addWidget(ui->tabWidget, 1);
+    ui->horizontalLayout->addLayout(content, 1);
+    ui->horizontalLayout->setSpacing(24);
+    ui->verticalLayout->setSpacing(12);
+    ui->label->setObjectName(QStringLiteral("EdenPageSubtitle"));
+    ui->label->style()->unpolish(ui->label);
+    ui->label->style()->polish(ui->label);
+    EdenUi::DecorateSettingsTabs(ui->tabWidget);
+    for (QWidget* page : std::initializer_list<QWidget*>{
+             applets_tab.get(), audio_tab.get(), cpu_tab.get(), debug_tab_tab.get(),
+             filesystem_tab.get(), general_tab.get(), graphics_tab.get(),
+             graphics_advanced_tab.get(), graphics_extensions_tab.get(),
+             graphics_frame_gen_tab.get(), hotkeys_tab.get(), network_tab.get(),
+             profile_tab.get(), system_tab.get(), ui_tab.get(), web_tab.get()}) {
+        EdenUi::PolishSettingsPage(page);
+    }
+
+    EdenUi::DialogNavigator::Instance().AttachHintBar(this, ui->verticalLayout, true);
+
+    if (const QScreen* display = screen()) {
+        const QRect available = display->availableGeometry();
+        resize(std::min(1220, available.width() - 40), std::min(860, available.height() - 60));
+    } else {
+        resize(1220, 860);
+    }
     ui->selectorList->setCurrentRow(0);
 
     // Selects the leftmost button on the bottom bar (Cancel as of writing)
@@ -150,6 +195,7 @@ void ConfigureDialog::ApplyConfiguration() {
     graphics_tab->ApplyConfiguration();
     graphics_advanced_tab->ApplyConfiguration();
     graphics_extensions_tab->ApplyConfiguration();
+    graphics_frame_gen_tab->ApplyConfiguration();
     audio_tab->ApplyConfiguration();
     debug_tab_tab->ApplyConfiguration();
     web_tab->ApplyConfiguration();
@@ -188,25 +234,40 @@ void ConfigureDialog::HandleApplyButtonClicked() {
 Q_DECLARE_METATYPE(QList<QWidget*>);
 
 void ConfigureDialog::PopulateSelectionList() {
-    const std::array<std::pair<QString, QList<QWidget*>>, 6> items{
-        {{tr("General"),
-          {general_tab.get(), hotkeys_tab.get(), ui_tab.get(), web_tab.get(), debug_tab_tab.get()}},
-         {tr("System"),
-          {system_tab.get(), profile_tab.get(), network_tab.get(), filesystem_tab.get(),
-           applets_tab.get()}},
-         {tr("CPU"), {cpu_tab.get()}},
-         {tr("Graphics"),
-          {graphics_tab.get(), graphics_advanced_tab.get(), graphics_extensions_tab.get()}},
-         {tr("Audio"), {audio_tab.get()}},
-         {tr("Controls"), input_tab->GetSubTabs()}},
+    struct Entry {
+        QString name;
+        QString description;
+        Library::Icon icon;
+        QList<QWidget*> tabs;
     };
+    const std::array<Entry, 6> items{{
+        {tr("General"), tr("Behavior, hotkeys, interface and web services"),
+         Library::Icon::Sliders,
+         {general_tab.get(), hotkeys_tab.get(), ui_tab.get(), web_tab.get(), debug_tab_tab.get()}},
+        {tr("System"), tr("Console, profiles, network, storage and applets"),
+         Library::Icon::Handheld,
+         {system_tab.get(), profile_tab.get(), network_tab.get(), filesystem_tab.get(),
+          applets_tab.get()}},
+        {tr("CPU"), tr("CPU accuracy and emulation options"), Library::Icon::Chip,
+         {cpu_tab.get()}},
+        {tr("Graphics"), tr("Renderer, resolution, filtering and frame generation"),
+         Library::Icon::Display,
+         {graphics_tab.get(), graphics_advanced_tab.get(), graphics_extensions_tab.get(),
+          graphics_frame_gen_tab.get()}},
+        {tr("Audio"), tr("Output engine, device and volume"), Library::Icon::Speaker,
+         {audio_tab.get()}},
+        {tr("Controls"), tr("Controllers, button mapping and motion"), Library::Icon::Controller,
+         input_tab->GetSubTabs()},
+    }};
 
     [[maybe_unused]] const QSignalBlocker blocker(ui->selectorList);
 
     ui->selectorList->clear();
     for (const auto& entry : items) {
-        auto* const item = new QListWidgetItem(entry.first);
-        item->setData(Qt::UserRole, QVariant::fromValue(entry.second));
+        auto* const item = new QListWidgetItem(entry.name);
+        item->setData(Qt::UserRole, QVariant::fromValue(entry.tabs));
+        item->setData(EdenUi::kSidebarIconRole, static_cast<int>(entry.icon));
+        item->setData(EdenUi::kSidebarDescriptionRole, entry.description);
 
         ui->selectorList->addItem(item);
     }
@@ -233,9 +294,18 @@ void ConfigureDialog::UpdateVisibleTabs() {
     ui->tabWidget->clear();
 
     const auto tabs = qvariant_cast<QList<QWidget*>>(items[0]->data(Qt::UserRole));
+    const QList<QWidget*> input_tabs = input_tab->GetSubTabs();
 
     for (auto* const tab : tabs) {
         LOG_DEBUG(Frontend, "{}", tab->accessibleName().toStdString());
-        ui->tabWidget->addTab(tab, tab->accessibleName());
+        ui->tabWidget->addTab(input_tabs.contains(tab) ? tab : EdenUi::ScrollHost(tab),
+                              tab->accessibleName());
+    }
+
+    if (page_header) {
+        page_header->SetPage(items[0]->text(),
+                             items[0]->data(EdenUi::kSidebarDescriptionRole).toString(),
+                             static_cast<Library::Icon>(
+                                 items[0]->data(EdenUi::kSidebarIconRole).toInt()));
     }
 }

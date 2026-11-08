@@ -12,7 +12,6 @@
 class QStandardItemModel;
 class Lobby;
 class HostRoomWindow;
-class ClientRoomWindow;
 class DirectConnectWindow;
 class ClickableLabel;
 
@@ -89,9 +88,10 @@ signals:
     void SaveConfig();
 
 private:
+    Lobby* EnsureLobby();
+
     Lobby* lobby = nullptr;
     HostRoomWindow* host_room = nullptr;
-    ClientRoomWindow* client_room = nullptr;
     DirectConnectWindow* direct_connect = nullptr;
     ClickableLabel* status_icon = nullptr;
     ClickableLabel* status_text = nullptr;

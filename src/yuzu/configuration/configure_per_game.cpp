@@ -8,6 +8,7 @@
 #include <cctype>
 #include <chrono>
 #include <filesystem>
+#include <initializer_list>
 #include <memory>
 #include <optional>
 #include <set>
@@ -38,6 +39,7 @@
 #include <QNetworkRequest>
 #include <QPushButton>
 #include <QRegularExpression>
+#include <QScreen>
 #include <QStandardPaths>
 #include <QString>
 #include <QTimer>
@@ -69,12 +71,15 @@
 #include "yuzu/configuration/configure_graphics.h"
 #include "yuzu/configuration/configure_graphics_advanced.h"
 #include "yuzu/configuration/configure_graphics_extensions.h"
+#include "yuzu/configuration/configure_graphics_frame_gen.h"
 #include "yuzu/configuration/configure_input_per_game.h"
 #include "yuzu/configuration/configure_modern_per_game.h"
 #include "yuzu/configuration/configure_network.h"
 #include "yuzu/configuration/configure_per_game.h"
 #include "yuzu/configuration/configure_per_game_addons.h"
 #include "yuzu/configuration/configure_system.h"
+#include "yuzu/ui/dialog_navigator.h"
+#include "yuzu/ui/settings_chrome.h"
 #include "yuzu/util/util.h"
 
 namespace {
@@ -381,6 +386,8 @@ ConfigurePerGame::ConfigurePerGame(QWidget* parent, u64 title_id_, const std::st
         std::make_unique<ConfigureGraphicsAdvanced>(system_, tab_group, *builder, this);
     graphics_extensions_tab =
         std::make_unique<ConfigureGraphicsExtensions>(system_, tab_group, *builder, this);
+    graphics_frame_gen_tab =
+        std::make_unique<ConfigureGraphicsFrameGen>(system_, tab_group, *builder, this);
     graphics_tab = std::make_unique<ConfigureGraphics>(
         system_, vk_device_records, [&]() { graphics_advanced_tab->ExposeComputeOption(); },
         [](Settings::AspectRatio, Settings::ResolutionSetup) {}, tab_group, *builder, this);
@@ -393,16 +400,17 @@ ConfigurePerGame::ConfigurePerGame(QWidget* parent, u64 title_id_, const std::st
     ui->setupUi(this);
 
     ui->tabWidget->addTab(addons_tab.get(), tr("Add-Ons"));
-    ui->tabWidget->addTab(system_tab.get(), tr("System"));
-    ui->tabWidget->addTab(cpu_tab.get(), tr("CPU"));
-    ui->tabWidget->addTab(graphics_tab.get(), tr("Graphics"));
-    ui->tabWidget->addTab(graphics_advanced_tab.get(), tr("Adv. Graphics"));
-    ui->tabWidget->addTab(graphics_extensions_tab.get(), tr("Ext. Graphics"));
-    ui->tabWidget->addTab(audio_tab.get(), tr("Audio"));
+    ui->tabWidget->addTab(EdenUi::ScrollHost(system_tab.get()), tr("System"));
+    ui->tabWidget->addTab(EdenUi::ScrollHost(cpu_tab.get()), tr("CPU"));
+    ui->tabWidget->addTab(EdenUi::ScrollHost(graphics_tab.get()), tr("Graphics"));
+    ui->tabWidget->addTab(EdenUi::ScrollHost(graphics_advanced_tab.get()), tr("Adv. Graphics"));
+    ui->tabWidget->addTab(EdenUi::ScrollHost(graphics_extensions_tab.get()), tr("Ext. Graphics"));
+    ui->tabWidget->addTab(EdenUi::ScrollHost(graphics_frame_gen_tab.get()), tr("Frame Gen"));
+    ui->tabWidget->addTab(EdenUi::ScrollHost(audio_tab.get()), tr("Audio"));
     ui->tabWidget->addTab(input_tab.get(), tr("Input Profiles"));
-    ui->tabWidget->addTab(network_tab.get(), tr("Network"));
-    ui->tabWidget->addTab(applets_tab.get(), tr("Applets"));
-    ui->tabWidget->addTab(modern_tab.get(), tr("Modern Console"));
+    ui->tabWidget->addTab(EdenUi::ScrollHost(network_tab.get()), tr("Network"));
+    ui->tabWidget->addTab(EdenUi::ScrollHost(applets_tab.get()), tr("Applets"));
+    ui->tabWidget->addTab(EdenUi::ScrollHost(modern_tab.get()), tr("Modern Console"));
 
     setFocusPolicy(Qt::ClickFocus);
     setWindowTitle(tr("Properties"));
@@ -455,7 +463,25 @@ ConfigurePerGame::ConfigurePerGame(QWidget* parent, u64 title_id_, const std::st
                 &ConfigurePerGame::HandleApplyButtonClicked);
     }
 
+    EdenUi::DialogNavigator::Instance().AttachHintBar(this, ui->verticalLayout_3, false);
+
     LoadConfiguration();
+
+    for (QWidget* page : std::initializer_list<QWidget*>{
+             addons_tab.get(), system_tab.get(), cpu_tab.get(), graphics_tab.get(),
+             graphics_advanced_tab.get(), graphics_extensions_tab.get(),
+             graphics_frame_gen_tab.get(), audio_tab.get(), network_tab.get(), applets_tab.get(),
+             modern_tab.get()}) {
+        EdenUi::PolishSettingsPage(page);
+    }
+    EdenUi::DecorateSettingsTabs(ui->tabWidget);
+    if (const QScreen* display = screen()) {
+        const QRect available = display->availableGeometry();
+        resize(std::min(1340, available.width() - 40), std::min(840, available.height() - 60));
+    }
+    ui->label_8->setObjectName(QStringLiteral("EdenPageSubtitle"));
+    ui->label_8->style()->unpolish(ui->label_8);
+    ui->label_8->style()->polish(ui->label_8);
 }
 
 ConfigurePerGame::~ConfigurePerGame() {

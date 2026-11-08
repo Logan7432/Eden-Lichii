@@ -38,6 +38,7 @@ class ConfigureCpu;
 class ConfigureGraphics;
 class ConfigureGraphicsAdvanced;
 class ConfigureGraphicsExtensions;
+class ConfigureGraphicsFrameGen;
 class ConfigureInputPerGame;
 class ConfigureSystem;
 class ConfigureNetwork;
@@ -112,6 +113,7 @@ private:
     std::unique_ptr<ConfigureCpu> cpu_tab;
     std::unique_ptr<ConfigureGraphicsAdvanced> graphics_advanced_tab;
     std::unique_ptr<ConfigureGraphicsExtensions> graphics_extensions_tab;
+    std::unique_ptr<ConfigureGraphicsFrameGen> graphics_frame_gen_tab;
     std::unique_ptr<ConfigureGraphics> graphics_tab;
     std::unique_ptr<ConfigureInputPerGame> input_tab;
     std::unique_ptr<ConfigureSystem> system_tab;

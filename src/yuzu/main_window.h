@@ -147,6 +147,10 @@ namespace Ui {
 class MainWindow;
 }
 
+namespace EdenUi {
+class TopBar;
+}
+
 enum class EmulatedDirectoryTarget {
     NAND,
     SDMC,
@@ -444,6 +448,17 @@ private slots:
 
     void CheckIconSize();
     void ToggleShowGameName();
+    void SetGameIconSize(u32 size);
+    void RecordRecentlyPlayed(u64 title_id);
+    void OpenMainMenu(const QPoint& global_pos);
+    void DecorateMenus();
+    QMenu* CreateQuickSettingsMenu(QWidget* parent);
+    QMenu* CreateLsfgMenu(QWidget* parent);
+    void UpdateLsfgButton();
+    void OpenLsfgSettings();
+    void UpdateTopBar();
+    void UpdateStatusBarIcons();
+    void OnSwitchProfile();
 
     void LaunchFirmwareApplet(u64 program_id, std::optional<Service::NFP::CabinetMode> mode);
     void OnCreateHomeMenuDesktopShortcut();
@@ -549,7 +564,13 @@ private:
     QLabel* game_fps_label = nullptr;
     QLabel* emu_frametime_label = nullptr;
     QLabel* tas_label = nullptr;
-    QLabel* firmware_label = nullptr;
+    QPushButton* firmware_label = nullptr;
+    QWidget* multiplayer_pill = nullptr;
+    EdenUi::TopBar* top_bar = nullptr;
+    int configure_start_category = -1;
+    int configure_start_tab = 0;
+    QPushButton* lsfg_button = nullptr;
+    QActionGroup* prompt_style_actions = nullptr;
     QPushButton* gpu_accuracy_button = nullptr;
     QPushButton* renderer_status_button = nullptr;
     QPushButton* refresh_button = nullptr;

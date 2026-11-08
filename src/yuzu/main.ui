@@ -579,7 +579,7 @@
     <bool>true</bool>
    </property>
    <property name="text">
-    <string>&amp;Tree View</string>
+    <string>&amp;Classic List</string>
    </property>
   </action>
   <action name="action_Grid_View">
@@ -587,7 +587,7 @@
     <bool>true</bool>
    </property>
    <property name="text">
-    <string>&amp;Grid View</string>
+    <string>&amp;Library</string>
    </property>
   </action>
   <action name="actionGame_Icon_Size">

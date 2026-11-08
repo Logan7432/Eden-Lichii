@@ -4,8 +4,14 @@
 #pragma once
 
 #include <memory>
+#include <QColor>
+#include <QList>
 #include <QWidget>
 #include "common/settings_enums.h"
+
+class QAbstractButton;
+class QButtonGroup;
+class QLabel;
 
 namespace Core {
 class System;
@@ -50,7 +56,18 @@ private:
 
     void UpdateWidthText();
 
+    void SetupAccentPicker();
+    void UpdateAccentPicker();
+    void OnAccentClicked(int index);
+
     std::unique_ptr<Ui::ConfigureUi> ui;
+
+    QLabel* accent_label{};
+    QLabel* accent_name{};
+    QButtonGroup* accent_group{};
+    QList<QAbstractButton*> accent_swatches;
+    QString accent_value;
+    QColor custom_accent;
 
     Settings::AspectRatio ratio;
     Settings::ResolutionSetup resolution_setting;

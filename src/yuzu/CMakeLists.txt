@@ -91,6 +91,8 @@ add_executable(yuzu
     configuration/configure_graphics_extensions.cpp
     configuration/configure_graphics_extensions.h
     configuration/configure_graphics_extensions.ui
+    configuration/configure_graphics_frame_gen.cpp
+    configuration/configure_graphics_frame_gen.h
     configuration/configure_hotkeys.cpp
     configuration/configure_hotkeys.h
     configuration/configure_hotkeys.ui
@@ -173,6 +175,29 @@ add_executable(yuzu
     game/game_tree.h game/game_tree.cpp
     game/game_card.h game/game_card.cpp
     game/search_field.h game/search_field.cpp
+    game/library/button_prompts.cpp
+    game/library/button_prompts.h
+    game/library/library_details.cpp
+    game/library/library_details.h
+    game/library/library_grid.cpp
+    game/library/library_grid.h
+    game/library/library_header.cpp
+    game/library/library_header.h
+    game/library/library_theme.cpp
+    game/library/library_theme.h
+    game/library/library_types.h
+    game/library/library_view.cpp
+    game/library/library_view.h
+    ui/action_sheet.cpp
+    ui/action_sheet.h
+    ui/eden_style.cpp
+    ui/eden_style.h
+    ui/dialog_navigator.cpp
+    ui/dialog_navigator.h
+    ui/settings_chrome.cpp
+    ui/settings_chrome.h
+    ui/top_bar.cpp
+    ui/top_bar.h
 
     hotkeys.cpp
     hotkeys.h
@@ -188,9 +213,6 @@ add_executable(yuzu
     multiplayer/chat_room.cpp
     multiplayer/chat_room.h
     multiplayer/chat_room.ui
-    multiplayer/client_room.h
-    multiplayer/client_room.cpp
-    multiplayer/client_room.ui
     multiplayer/direct_connect.cpp
     multiplayer/direct_connect.h
     multiplayer/direct_connect.ui

@@ -6,11 +6,15 @@
 
 #pragma once
 
+#include <mutex>
+
 #include <QKeyEvent>
 #include <QObject>
 
 #include "common/input.h"
 #include "common/settings_input.h"
+
+class QTimer;
 
 namespace Core::HID {
 using ButtonValues = std::array<Common::Input::ButtonStatus, Settings::NativeButton::NumButtons>;
@@ -24,26 +28,53 @@ class ControllerNavigation : public QObject {
     Q_OBJECT
 
 public:
+    enum class Button : u8 {
+        A,
+        B,
+        X,
+        Y,
+        L,
+        R,
+        ZL,
+        ZR,
+        Plus,
+        Minus,
+        Up,
+        Down,
+        Left,
+        Right,
+        RStickUp,
+        RStickDown,
+        Count,
+    };
+
     explicit ControllerNavigation(Core::HID::HIDCore& hid_core, QWidget* parent = nullptr);
-    ~ControllerNavigation();
+    ~ControllerNavigation() override;
 
     /// Disables events from the emulated controller
     void UnloadController();
 
 signals:
     void TriggerKeyboardEvent(Qt::Key key);
+    void ButtonPressed(ControllerNavigation::Button button);
     void TriggerContextMenu();
 
 private:
-    void TriggerButton(Settings::NativeButton::Values native_button, Qt::Key key);
     void ControllerUpdateEvent(Core::HID::ControllerTriggerType type);
+    u32 ReadButtonState() const;
+    void ProcessState(u32 state);
+    void Fire(Button button);
+    void OnRepeat();
 
-    void ControllerUpdateButton();
+    static constexpr u32 Bit(Button button) {
+        return 1U << static_cast<u32>(button);
+    }
 
-    void ControllerUpdateStick();
-
-    Core::HID::ButtonValues button_values{};
-    Core::HID::SticksValues stick_values{};
+    u32 posted_state{};
+    u32 current_state{};
+    Button repeat_button{Button::Count};
+    int repeat_count{};
+    QTimer* repeat_timer = nullptr;
 
     int player1_callback_key{};
     int handheld_callback_key{};
@@ -52,3 +83,5 @@ private:
     Core::HID::EmulatedController* player1_controller;
     Core::HID::EmulatedController* handheld_controller;
 };
+
+Q_DECLARE_METATYPE(ControllerNavigation::Button);

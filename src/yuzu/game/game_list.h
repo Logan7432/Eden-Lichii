@@ -6,6 +6,8 @@
 
 #pragma once
 
+#include <vector>
+
 #include <QLabel>
 #include <QLineEdit>
 #include <QList>
@@ -23,7 +25,11 @@
 #include "qt_common/config/uisettings.h"
 #include "qt_common/game_list/model.h"
 #include "qt_common/util/game.h"
+#include "yuzu/game/library/button_prompts.h"
+#include "yuzu/game/library/library_types.h"
+#include "yuzu/util/controller_navigation.h"
 
+class QTimer;
 class QVariantAnimation;
 
 class GameCard;
@@ -44,6 +50,15 @@ class QAbstractItemView;
 class QMenu;
 namespace Core {
 class System;
+}
+
+namespace InputCommon {
+class InputSubsystem;
+}
+
+namespace Library {
+class HintBar;
+class LibraryView;
 }
 
 namespace FileSys {
@@ -75,6 +90,7 @@ public:
     void ClearFilter();
     void SetFilterFocus();
     void SetFilterVisible(bool visibility);
+    void FocusDefault();
     bool IsEmpty() const;
 
     void PopulateAsync(QVector<UISettings::GameDir>& game_dirs);
@@ -88,8 +104,18 @@ public:
 
     /// Disables events from the emulated controller
     void UnloadController();
+    void SetInputSubsystem(InputCommon::InputSubsystem* input_subsystem_);
 
+    bool IsTreeMode();
     void ResetViewMode();
+
+    void ApplyDisplaySettings();
+    void RefreshPlayTimes();
+    void RefreshPrompts();
+
+    static int LibraryCardSize(u32 icon_size);
+
+    QMenu* CreateLibraryMenu(QWidget* parent);
 
 public slots:
     void SetNupConversionRunning(bool running);
@@ -127,11 +153,15 @@ signals:
     void ShowList(bool show);
     void PopulatingCompleted();
     void SaveConfig();
+    void IconSizeChangeRequested(u32 icon_size);
+    void TreeViewRequested();
+    void MainMenuRequested(const QPoint& global_pos);
 
 private slots:
     void OnTextChanged(const QString& new_text);
     void OnFilterCloseClicked();
     void OnPopulatingCompleted(const QStringList& watch_list);
+    void OnUpdateThemedIcons();
 
 private:
     void SetupViews();
@@ -139,15 +169,32 @@ private:
     bool eventFilter(QObject* obj, QEvent* event) override;
     void changeEvent(QEvent*) override;
 
+    bool IsLibraryMode() const;
+
     void ValidateEntry(const QModelIndex& item);
+    void LaunchGame(const QString& file_path, u64 title_id);
 
     void ToggleFavorite(u64 program_id);
+    QStandardItem* FavoritesRow() const;
 
     void PopupContextMenu(const QPoint& menu_location);
     void AddGamePopup(QMenu& context_menu, u64 program_id, const std::string& path);
     void AddCustomDirPopup(QMenu& context_menu, QModelIndex selected);
     void AddPermDirPopup(QMenu& context_menu, QModelIndex selected);
     void AddFavoritesPopup(QMenu& context_menu);
+    void ShowAddDirectoryMenu(const QPoint& global_pos);
+
+    void SetupLibrary();
+    std::vector<Library::Entry> CollectLibraryEntries() const;
+    void UpdateLibrary(bool animate);
+    void ScheduleLibraryUpdate();
+    Library::Options LibraryOptionsFromSettings() const;
+    void ShowGameContextMenu(const QString& path, u64 program_id, const QPoint& global_pos);
+
+    void OnControllerButton(ControllerNavigation::Button button);
+    void UpdatePromptStyle(bool from_controller);
+    Library::PromptState DetectControllerPrompts() const;
+    bool ControllerConnected() const;
 
     void RetranslateUI();
 
@@ -165,8 +212,19 @@ private:
     GameListModel* item_model = nullptr;
     Settings::GameListMode game_list_mode;
 
+    Library::LibraryView* library_view = nullptr;
+    QTimer* library_update_timer = nullptr;
+    bool library_progressive = false;
+    bool tree_icons_stale = false;
+    bool filter_bar_visible = true;
+    bool last_input_from_controller = false;
+    bool prompt_style_detected = false;
+    mutable std::string prompt_cache_key;
+    mutable Library::PromptState prompt_cache;
+
     ControllerNavigation* controller_navigation = nullptr;
     QPointer<QMenu> controller_context_menu;
+    InputCommon::InputSubsystem* input_subsystem = nullptr;
 
     QVariantAnimation* vertical_scroll = nullptr;
     QVariantAnimation* horizontal_scroll = nullptr;
@@ -192,14 +250,26 @@ public:
 signals:
     void AddDirectory();
 
+private slots:
+    void onUpdateThemedIcons();
+
 protected:
     void mouseDoubleClickEvent(QMouseEvent* event) override;
+    void mouseMoveEvent(QMouseEvent* event) override;
+    void mousePressEvent(QMouseEvent* event) override;
+    void leaveEvent(QEvent* event) override;
+    void paintEvent(QPaintEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
 
 private:
     void changeEvent(QEvent* event) override;
     void RetranslateUI();
+    QRectF ButtonRect() const;
 
     QVBoxLayout* layout = nullptr;
-    QLabel* image = nullptr;
-    QLabel* text = nullptr;
+    Library::HintBar* hint_bar = nullptr;
+    QString headline;
+    QString body;
+    QString button_text;
+    bool button_hovered = false;
 };
