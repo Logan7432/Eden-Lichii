@@ -48,6 +48,7 @@
 #include "yuzu/configuration/configure_camera.h"
 #include "yuzu/configuration/configure_debug_controller.h"
 #include "yuzu/configuration/configure_input.h"
+#include "yuzu/ui/settings_chrome.h"
 #include "yuzu/configuration/configure_input_advanced.h"
 #include "yuzu/configuration/configure_input_player.h"
 #include "yuzu/configuration/configure_microphone.h"
@@ -132,7 +133,8 @@ void ConfigureInput::Initialize(InputCommon::InputSubsystem* input_subsystem,
 
     for (std::size_t i = 0; i < player_tabs.size(); ++i) {
         QHBoxLayout* tab_layout = new QHBoxLayout(player_tabs[i]);
-        tab_layout->addWidget(player_controllers[i]);
+        tab_layout->setContentsMargins(0, 0, 0, 0);
+        tab_layout->addWidget(EdenUi::ScrollHost(player_controllers[i]));
         connect(player_controllers[i], &ConfigureInputPlayer::Connected, [this, i](bool checked) {
             // Ensures that connecting a controller changes the number of players
             if (connected_controller_checkboxes[i]->isChecked() != checked) {
