@@ -26,9 +26,12 @@ public:
     static void Restart(QWidget* window, const QString& target);
 
 #ifdef _WIN32
-    // Start the installer helper on the files under `staging`, then close `window`.
+    // Install the files under `staging` over this installation now, then close `window` and start
+    // the installed program once this one has closed.
     static bool LaunchInstaller(QWidget* window, const QString& staging);
 #endif
+
+    static QString PendingRestart();
 
 private slots:
     void Download();
@@ -39,7 +42,7 @@ private:
     // Replace the running AppImage with the new one, keeping the old one for a rollback.
     void InstallInPlace(const std::filesystem::path& target);
 #ifdef _WIN32
-    // Download and unpack the new version beside the running one; a helper installs it on exit.
+    // Download and unpack the new version beside the running one, then install it.
     void InstallOnRestart(const std::filesystem::path& exe);
 #endif
 

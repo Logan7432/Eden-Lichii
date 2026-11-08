@@ -141,31 +141,30 @@ void UpdateDialog::Restart(QWidget* window, const QString& target) {
     }
 }
 
+namespace {
+QString pending_restart;
+}
+
+QString UpdateDialog::PendingRestart() {
+    return pending_restart;
+}
+
 #ifdef _WIN32
 bool UpdateDialog::LaunchInstaller(QWidget* window, const QString& staging) {
-    // The helper runs from a copy, because the installed one is replaced along with everything else.
-    const QString helper =
-        QCoreApplication::applicationDirPath() + QStringLiteral("/lichii-updater.exe");
-    const QString copy = QDir::temp().filePath(
-        QStringLiteral("lichii-updater-%1.exe").arg(QCoreApplication::applicationPid()));
-    QFile::remove(copy);
-    if (!QFile::copy(helper, copy)) {
-        LOG_ERROR(Frontend, "Could not copy the installer helper {}", helper.toStdString());
-        QtCommon::Frontend::Critical(tr("Failed to install the update"),
-                                     tr("Could not start the update installer."));
+    const QString program = QCoreApplication::applicationFilePath();
+    const std::filesystem::path install_dir{
+        QCoreApplication::applicationDirPath().toStdWString()};
+    std::error_code ec;
+    if (!UpdateInstaller::Install(std::filesystem::path{staging.toStdWString()}, install_dir, ec)) {
+        LOG_ERROR(Frontend, "Could not install the update: {}", ec.message());
+        QtCommon::Frontend::Critical(
+            tr("Failed to install the update"),
+            tr("The update could not be installed, so the previous files were put back.\n\n%1")
+                .arg(QString::fromStdString(ec.message())));
         return false;
     }
-
-    const auto install_dir = QCoreApplication::applicationDirPath();
-    const auto native = [](const QString& path) { return QDir::toNativeSeparators(path); };
-    if (!QProcess::startDetached(
-            copy, {QString::number(QCoreApplication::applicationPid()), native(staging),
-                   native(install_dir), native(QCoreApplication::applicationFilePath())})) {
-        LOG_ERROR(Frontend, "Could not start the installer helper {}", copy.toStdString());
-        QtCommon::Frontend::Critical(tr("Failed to install the update"),
-                                     tr("Could not start the update installer."));
-        return false;
-    }
+    LOG_INFO(Frontend, "Installed the update into {}", install_dir.string());
+    pending_restart = program;
     if (window) {
         QMetaObject::invokeMethod(window, &QWidget::close, Qt::QueuedConnection);
     }
@@ -177,9 +176,7 @@ void UpdateDialog::Download() {
 #ifdef _WIN32
     if (m_asset.filename.ends_with(".zip")) {
         const std::filesystem::path exe{QCoreApplication::applicationFilePath().toStdWString()};
-        if (UpdateInstaller::CanReplace(exe) &&
-            QFile::exists(QCoreApplication::applicationDirPath() +
-                          QStringLiteral("/lichii-updater.exe"))) {
+        if (UpdateInstaller::CanReplace(exe)) {
             InstallOnRestart(exe);
             return;
         }
@@ -305,7 +302,7 @@ void UpdateDialog::InstallOnRestart(const std::filesystem::path& exe) {
 
     const auto button = QtCommon::Frontend::Question(
         tr("Update Ready"),
-        tr("Lichii will close, install the update and start again. The previous version is "
+        tr("Eden will install the update, close and start again. The previous version is "
            "kept, and your settings and data are not changed.\n\nRestart now?"),
         QtCommon::Frontend::Yes | QtCommon::Frontend::No);
     if (button != QtCommon::Frontend::Yes ||

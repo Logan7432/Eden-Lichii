@@ -26,6 +26,11 @@
 #endif
 
 #include "main_window.h"
+#ifdef ENABLE_UPDATE_CHECKER
+#include <QFileInfo>
+#include <QProcess>
+#include "updater/update_dialog.h"
+#endif
 
 // TODO(crueter): This is very annoying, see if there are any other solutions.
 static Qt::HighDpiScaleFactorRoundingPolicy GetHighDpiRoundingPolicy() {
@@ -151,10 +156,19 @@ int main(int argc, char* argv[]) {
     // generating shaders
     setlocale(LC_ALL, "C");
 
-    MainWindow main_window{has_broken_vulkan};
-    // After settings have been loaded by GMainWindow, apply the filter
-    main_window.show();
+    int result = 0;
+    {
+        MainWindow main_window{has_broken_vulkan};
+        // After settings have been loaded by GMainWindow, apply the filter
+        main_window.show();
 
-    app.connect(&app, &QGuiApplication::applicationStateChanged, &main_window, &MainWindow::OnAppFocusStateChanged);
-    return app.exec();
+        app.connect(&app, &QGuiApplication::applicationStateChanged, &main_window, &MainWindow::OnAppFocusStateChanged);
+        result = app.exec();
+    }
+#ifdef ENABLE_UPDATE_CHECKER
+    if (const QString restart = UpdateDialog::PendingRestart(); !restart.isEmpty()) {
+        QProcess::startDetached(restart, {}, QFileInfo{restart}.absolutePath());
+    }
+#endif
+    return result;
 }
