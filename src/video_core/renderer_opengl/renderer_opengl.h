@@ -33,6 +33,7 @@ class GPU;
 namespace OpenGL {
 
 class BlitScreen;
+class FramePresenter;
 
 class RendererOpenGL final : public VideoCore::RendererBase {
 public:
@@ -78,6 +79,8 @@ private:
 
     std::unique_ptr<BlitScreen> blit_screen;
     std::unique_ptr<BlitScreen> blit_applet;
+    std::unique_ptr<FramePresenter> frame_presenter;
+    bool frame_generation_released = true;
 };
 
 } // namespace OpenGL

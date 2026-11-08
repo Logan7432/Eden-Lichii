@@ -17,8 +17,10 @@
 #include "core/core_timing.h"
 #include "core/frontend/emu_window.h"
 #include "video_core/capture.h"
+#include "video_core/frame_generation.h"
 #include "video_core/present.h"
 #include "video_core/renderer_opengl/gl_blit_screen.h"
+#include "video_core/renderer_opengl/gl_frame_presenter.h"
 #include "video_core/renderer_opengl/gl_rasterizer.h"
 #include "video_core/renderer_opengl/gl_shader_manager.h"
 #include "video_core/renderer_opengl/gl_shader_util.h"
@@ -141,6 +143,30 @@ void RendererOpenGL::Composite(std::span<const Tegra::FramebufferConfig> framebu
 
     RenderAppletCaptureLayer(framebuffers);
     RenderScreenshot(framebuffers);
+
+    if (const auto layout = emu_window.GetFramebufferLayout();
+        VideoCore::FrameGeneration::Enabled() && layout.width > 0 && layout.height > 0) {
+        if (!frame_presenter) {
+            frame_presenter = std::make_unique<FramePresenter>(emu_window);
+        }
+        frame_generation_released = false;
+        state_tracker.BindFramebuffer(frame_presenter->BeginFrame(layout.width, layout.height));
+        blit_screen->DrawScreen(framebuffers, layout, false);
+        frame_presenter->EndFrame();
+        state_tracker.BindFramebuffer(0);
+
+        ++m_current_frame;
+        gpu.RendererFrameEndNotify();
+        rasterizer.TickFrame();
+        render_window.OnFrameDisplayed();
+        return;
+    }
+    if (frame_presenter && !frame_generation_released) {
+        frame_presenter->Drain();
+        frame_presenter->ReleaseGenerator();
+        frame_generation_released = true;
+        VideoCore::FrameGeneration::SetState(VideoCore::FrameGeneration::State::Off);
+    }
 
     state_tracker.BindFramebuffer(0);
     blit_screen->DrawScreen(framebuffers, emu_window.GetFramebufferLayout(), false);

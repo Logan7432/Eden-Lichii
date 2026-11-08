@@ -10,6 +10,7 @@
 #ifdef HAS_LSFG
 #include "video_core/renderer_vulkan/present/lsfg_common.h"
 #endif
+#include "video_core/renderer_vulkan/vk_frame_gen_presenter.h"
 #include "video_core/renderer_vulkan/vk_present_manager.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_swapchain.h"
@@ -162,6 +163,8 @@ PresentManager::PresentManager(const vk::Instance& instance_,
         free_queue.push_back(&frame);
     }
 
+    frame_gen_presenter = std::make_unique<FrameGenPresenter>(*this);
+
     if (use_present_thread) {
         present_thread = std::jthread([this](std::stop_token token) { PresentThread(token); });
     }
@@ -187,7 +190,7 @@ Frame* PresentManager::GetRenderFrame() {
 }
 
 void PresentManager::Present(Frame* frame) {
-    if (use_present_thread) {
+    if (use_present_thread || frame_gen_presenter->UsePresentThread()) {
         scheduler.Record([this, frame](vk::CommandBuffer) {
             std::unique_lock lock{queue_mutex};
             present_queue.push_back(frame);
@@ -195,6 +198,7 @@ void PresentManager::Present(Frame* frame) {
         });
     } else {
         scheduler.WaitWorker();
+        WaitPresent();
         CopyToSwapchain(frame);
         free_queue.push_back(frame);
     }
@@ -311,7 +315,7 @@ void PresentManager::RecreateFrame(Frame* frame, u32 width, u32 height, VkFormat
 }
 
 void PresentManager::WaitPresent() {
-    if (!use_present_thread) {
+    if (!present_thread.joinable()) {
         return;
     }
 
@@ -437,6 +441,9 @@ void PresentManager::CopyToSwapchainImpl(Frame* frame) {
     }
     if (!swapchain.IsCreated()) {
         DiscardFrame(frame);
+        return;
+    }
+    if (frame_gen_presenter->Present(frame)) {
         return;
     }
 

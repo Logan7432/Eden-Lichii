@@ -516,7 +516,7 @@ struct Values {
                                                 true,
                                                 true};
 
-    SwitchableSetting<bool> frame_gen{linkage, false, "frame_gen", Category::Renderer,
+    SwitchableSetting<bool, true> frame_gen{linkage, false, false, false, "frame_gen", Category::Renderer,
                                       Specialization::Default, true, false};
 
     SwitchableSetting<FrameGenType> frame_gen_type{linkage,
@@ -607,6 +607,37 @@ struct Values {
                                           linkage, 0, "bg_green", Category::Renderer, Specialization::Default, true, true};
     SwitchableSetting<u8, false> bg_blue{
                                          linkage, 0, "bg_blue", Category::Renderer, Specialization::Default, true, true};
+
+    SwitchableSetting<bool> frame_generation{linkage,
+                                             false,
+                                             "frame_generation",
+                                             Category::RendererFrameGen,
+                                             Specialization::Default,
+                                             true,
+                                             true};
+    SwitchableSetting<FrameGenerationMultiplier, true> frame_generation_multiplier{
+        linkage,         FrameGenerationMultiplier::X2,     "frame_generation_multiplier",
+        Category::RendererFrameGen, Specialization::Default, true, true};
+    SwitchableSetting<int, true> frame_generation_flow_scale{linkage,
+                                                             100,
+                                                             25,
+                                                             100,
+                                                             "frame_generation_flow_scale",
+                                                             Category::RendererFrameGen,
+                                                             Specialization::Scalar |
+                                                                 Specialization::Percentage,
+                                                             true,
+                                                             true};
+    SwitchableSetting<bool> frame_generation_performance{linkage,
+                                                         false,
+                                                         "frame_generation_performance",
+                                                         Category::RendererFrameGen,
+                                                         Specialization::Default,
+                                                         true,
+                                                         true};
+    Setting<std::string> lossless_dll_path{linkage, std::string{}, "lossless_dll_path",
+                                           Category::RendererFrameGen, Specialization::Default,
+                                           true, true};
 
     SwitchableSetting<GpuAccuracy, true> gpu_accuracy{linkage,
 #ifdef __ANDROID__

@@ -168,7 +168,7 @@ void Swapchain::Create(
     resource_ticks.resize(image_count);
 }
 
-bool Swapchain::AcquireNextImage(bool may_flush) {
+bool Swapchain::AcquireNextImage(bool may_flush, bool frame_pacing) {
     const VkResult result = device.GetLogical().AcquireNextImageKHR(
         *swapchain, (std::numeric_limits<u64>::max)(), *present_semaphores[frame_index],
         VK_NULL_HANDLE, &image_index);
@@ -212,6 +212,10 @@ bool Swapchain::AcquireNextImage(bool may_flush) {
         break;
     }
     };
+
+    if (!frame_pacing) {
+        return false;
+    }
 
 #ifdef __ANDROID__
     if (android_get_device_api_level() >= 30) {

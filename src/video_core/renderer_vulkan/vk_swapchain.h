@@ -39,7 +39,7 @@ public:
     /// Acquires the next image in the swapchain, waits as needed. Returns true when no image was
     /// acquired (out of date) and the swapchain has to be recreated first.
     /// `may_flush`: false on the async present thread (see Scheduler::Wait).
-    bool AcquireNextImage(bool may_flush = true);
+    bool AcquireNextImage(bool may_flush = true, bool frame_pacing = true);
 
     /// Presents the rendered image to the swapchain.
     void Present(VkSemaphore render_semaphore);

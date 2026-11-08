@@ -265,6 +265,10 @@ endif()
 # VMA
 AddJsonPackage(vulkan-memory-allocator)
 
+if (NOT ANDROID)
+    add_subdirectory(lsfg-vk)
+endif()
+
 if (VulkanMemoryAllocator_ADDED)
     if (CXX_CLANG)
         target_compile_options(VulkanMemoryAllocator INTERFACE

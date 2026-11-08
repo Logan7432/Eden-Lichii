@@ -8,6 +8,7 @@
 
 #include <atomic>
 #include <condition_variable>
+#include <memory>
 #include <mutex>
 #include <boost/container/deque.hpp>
 
@@ -23,6 +24,7 @@ class EmuWindow;
 namespace Vulkan {
 
 class Device;
+class FrameGenPresenter;
 class Scheduler;
 class Swapchain;
 
@@ -73,6 +75,8 @@ public:
     [[nodiscard]] VkFormat SwapchainImageFormat() const { return swapchain_image_format; }
 
 private:
+    friend class FrameGenPresenter;
+
     void PresentThread(std::stop_token token);
 
     void CopyToSwapchain(Frame* frame);
@@ -102,6 +106,7 @@ private:
     std::mutex swapchain_mutex;
     std::mutex queue_mutex;
     std::mutex free_mutex;
+    std::unique_ptr<FrameGenPresenter> frame_gen_presenter;
     std::jthread present_thread;
     bool blit_supported;
     bool storage_supported;

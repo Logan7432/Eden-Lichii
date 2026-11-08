@@ -165,6 +165,7 @@ ENUM(ExtendedDynamicState, Disabled, EDS1, EDS2, EDS3);
 ENUM(GpuLogLevel, Off, Errors, Standard, Verbose, All)
 ENUM(GameListMode, TreeView, GridView, CarouselView);
 ENUM(SpeedMode, Standard, Turbo, Slow);
+ENUM(FrameGenerationMultiplier, X2, X3, X4, X5, X6, X7, X8);
 ENUM(FrameGenType, Lsfg, Fsr3);
 
 template <typename Type>

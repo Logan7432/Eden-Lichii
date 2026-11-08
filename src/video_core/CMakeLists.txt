@@ -492,6 +492,27 @@ target_include_directories(video_core PRIVATE ${HOST_SHADERS_INCLUDE})
 
 target_link_libraries(video_core PRIVATE sirit::sirit)
 
+target_sources(video_core PRIVATE
+    frame_generation.cpp
+    frame_generation.h
+    renderer_vulkan/vk_frame_gen_presenter.cpp
+    renderer_vulkan/vk_frame_gen_presenter.h
+    renderer_vulkan/vk_frame_generator.cpp
+    renderer_vulkan/vk_frame_generator.h
+)
+
+if (ENABLE_OPENGL)
+    target_sources(video_core PRIVATE
+        renderer_opengl/gl_frame_presenter.cpp
+        renderer_opengl/gl_frame_presenter.h
+    )
+endif()
+
+if (TARGET lsfg-vk)
+    target_link_libraries(video_core PRIVATE lsfg-vk)
+    target_compile_definitions(video_core PRIVATE EDEN_FRAME_GENERATION)
+endif()
+
 # Header-only stuff needed by all dependent targets
 target_link_libraries(video_core PUBLIC Vulkan::Headers Vulkan::UtilityHeaders GPUOpen::VulkanMemoryAllocator)
 
