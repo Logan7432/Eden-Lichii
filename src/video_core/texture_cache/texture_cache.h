@@ -348,7 +348,7 @@ void TextureCache<P>::ApplyThresholdOverrides(bool log) {
     }
     expected_memory = (std::min)(expected_memory, critical_memory);
     if (log) {
-        LOG_INFO(HW_GPU, "Texture cache thresholds: expected {} MiB, critical {} MiB, minimum {} MiB",
+        LOG_DEBUG(HW_GPU, "Texture cache thresholds: expected {} MiB, critical {} MiB, minimum {} MiB",
                  expected_memory >> 20, critical_memory >> 20, minimum_memory >> 20);
     }
 }
@@ -432,7 +432,7 @@ void TextureCache<P>::TickFrame() {
                     const bool log = budget_check_frames == 1 || change >= 256_MiB;
                     ApplyThresholdOverrides(log);
                     if (log) {
-                        LOG_INFO(HW_GPU,
+                        LOG_DEBUG(HW_GPU,
                                  "Memory margins: base {} MiB, out of memory {} MiB, block slack {} MiB",
                                  margin >> 20, pressure_margin >> 20, slack_margin >> 20);
                     }
