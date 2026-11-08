@@ -120,7 +120,6 @@ public:
     void InnerInvalidation(std::span<const std::pair<DAddr, std::size_t>> sequences) override;
     void OnCacheInvalidation(DAddr addr, u64 size) override;
     void OnCacheInvalidations(std::span<const std::pair<DAddr, u64>> ranges) override;
-    bool TryCacheInvalidation(DAddr addr, u64 size) override;
     bool OnCPUWrite(DAddr addr, u64 size) override;
     void InvalidateGPUCache() override;
     void UnmapMemory(DAddr addr, u64 size) override;
@@ -194,6 +193,20 @@ private:
     /// Remembers render target 0 of a draw with one of Ocarina of Time's tonemap shaders.
     void TrackOotTonemappedImage(const GraphicsPipeline& pipeline);
     bool TryNx2IndirectReset(bool is_indexed, u32 instance_count);
+
+    /// A stretch of a draw whose vertices all carry the same texture handle.
+    struct AttributeHandleRun {
+        u32 first;
+        u32 count;
+        u32 handle;
+    };
+
+    /// Splits the current draw wherever the texture handle carried in the vertex data changes.
+    void CollectAttributeHandleRuns(bool is_indexed);
+
+    std::vector<AttributeHandleRun> attribute_handle_runs;
+    GraphicsPipeline* attribute_handle_pipeline{};
+    bool split_attribute_handles{};
 
     void FlushWork();
 

@@ -5,93 +5,85 @@
 # SPDX-FileCopyrightText: 2018 yuzu Emulator Project
 # SPDX-License-Identifier: GPL-2.0-or-later
 -->
+<!-- lang: en-GB -->
+
+<h1 align="center">
+  <br>
+  <a href="https://git.eden-emu.dev/eden-emu/eden"><img src="./dist/qt_themes/default/icons/256x256/eden.png" alt="Eden" width="200"></a>
+  <br>
+  <b>Eden</b>
+  <br>
+</h1>
+
+<h4 align="center"><b>Eden</b> is a free and open-source (FOSS) Switch 1 emulator started by developer Camille LaVey.
+<br>
+Written in C++, with builds for Windows, Linux, macOS, Android, FreeBSD and more.
+</h4>
 
 <p align="center">
-  <img src="dist/branding/lichii_icon_with_logo.png" alt="Lichii" width="600">
+    </a>
+    <a href="https://discord.gg/HstXbPch7X">
+        <img src="https://img.shields.io/discord/1367654015269339267?color=5865F2&label=Eden&logo=discord&logoColor=white"
+            alt="Discord">
+    </a>
+    <a href="https://stt.gg/qKgFEAbH">
+        <img src="https://img.shields.io/revolt/invite/qKgFEAbH?color=d61f3a&label=Stoat"
+            alt="Stoat">
+    </a>
 </p>
 
-# Lichii
+<p align="center">
+  <a href="#compatibility">Compatibility</a> |
+  <a href="#contribute">Contribute</a> |
+  <a href="#building">Building</a> |
+  <a href="#download">Download</a> |
+  <a href="#license">License</a>
+</p>
 
-Lichii is an experimental, open-source Nintendo Switch and Switch 2 emulator written in C++. It builds on Eglantine, Eden, yuzu and Sudachi, preserving their contributions while developing this fork's game compatibility and renderer fixes.
+## Compatibility
 
-This is an independent fork, not an official release of those upstream projects. Lichii is not affiliated with Nintendo.
+The emulator is capable of running most commercial games at full speed, provided you meet the necessary hardware requirements.
 
-Visit the [official Lichii website](https://lichii.zortos.me) to find games and compare community compatibility reports.
+A list of supported games will be available in future. Please be patient.
 
-## Downloads and setup
+Check out our [website](https://eden-emu.dev) for the latest news on exciting features, monthly progress reports, and more!
 
-Download Lichii only from this repository's [releases page](https://github.com/zortos293/Lichii/releases). Lichii has no other download site: archives offered elsewhere, such as lichii.org, are not built by this project, and one has been reported to install malware ([#545](https://github.com/zortos293/Lichii/issues/545)).
+[![Packaging status](https://repology.org/badge/vertical-allrepos/eden-emulator.svg)](https://repology.org/project/eden-emulator/versions)
 
-On Windows, extract the entire build archive and run **lichii.exe**. Only use games and system files you have legally obtained. Games, keys and firmware are not included.
+## Contribute
 
-### Existing saves and settings
+To contribute to Eden; be it financially, code, bug reports, or otherwise, see our [Contributing guidelines](./CONTRIBUTING.md).
 
-The rebrand intentionally retains the existing Eden/Eglantine data directories and configuration keys. It does not move or delete saves, settings or shader caches. Back up your saves before testing experimental builds.
+## Documentation
 
-## Compatibility and issue reports
+We have a user manual! See our [User Handbook](./docs/user/README.md).
 
-Compatibility and performance vary by game, hardware and driver. Rendering errors, stutters and crashes remain possible. Passing automated tests does not establish that a game renders correctly, and this project makes no universal frame-rate guarantee.
+## Building
 
-Browse [community compatibility reports](https://lichii.zortos.me/reports) for results with each player's build and setup.
+See the [General Build Guide](docs/Build.md)
 
-Desktop reporting requires a build containing [PR #303](https://github.com/zortos293/Lichii/pull/303) and is not available in build 88. In builds that include it, play and stop a Switch 2 game, then right-click that game and choose **Submit compatibility report**. Only the latest session in the current Lichii process is eligible.
+For information on provided development tooling, see the [Tools directory](./tools)
 
-Confirm the matching website catalog entry and review the editable machine, game, setup, and enabled add-on details prefilled where available. Check the public preview and give explicit consent before submitting. Nothing uploads automatically, and the native v1 reporter does not read or upload logs or files.
+## Download
 
-When [reporting an issue](https://github.com/zortos293/Eglantine/issues), include:
+You can download the latest releases from [our release page](https://git.eden-emu.dev/eden-emu/eden/releases).
 
-- The exact build, game version, CPU, GPU and driver version.
-- Relevant settings and steps to reproduce the problem.
-- A screenshot and the log from the affected session, after checking it for personal information.
+Save us some bandwidth! We have [mirrors available](./docs/user/ThirdParty.md#mirrors) as well.
 
-Do not upload game files, keys, firmware or private account information.
+## License
 
-## Building and contributing
+Eden is licensed under the GPLv3 (or any later version). Refer to the [LICENSE.txt](https://git.eden-emu.dev/eden-emu/eden/src/branch/master/LICENSE.txt) file.
 
-See the [build guide](docs/Build.md), [user documentation](docs/user/README.md) and [coding guidelines](docs/Coding.md). Some inherited documentation and internal build target names still use upstream names. The GUI build target remains `yuzu`; its output is `lichii.exe` on Windows and `lichii` on other desktop platforms.
+## Special thanks
 
-Keep changes focused and distinguish code-level checks from actual gameplay testing.
+Super special thanks to Cloudflare for preventing the git server from blowing up.
 
-## Artwork
-Art created by YOB (yobslab)
-The supplied Lichii logo, icon and library artwork are in [dist/branding](dist/branding). Windows, Linux and macOS icon resources are generated from that artwork by [Generate-LichiiIcons.ps1](tools/Generate-LichiiIcons.ps1).
+- Yuzu
+- Ryujinx
+- Sudachi
+- Citron
+- Torzu
+- Suyu
+- Ryubing
 
-## Support Lichii
-
-Lichii is free and stays free. If you want to help, you can donate in crypto. Donations help pay for the AI tools and build machines used to develop this open-source project faster.
-
-**Solana (SOL)**
-```text
-JepEjfyWjGjhJvHSrqj52KtLjcbbbmUh1iGqerYBF4w
-```
-
-**Ethereum (ETH)**
-```text
-0x055ABa1b80Bc35C836Ce7E9F47c2b3d6C75b5534
-```
-
-**Bitcoin (BTC)**
-```text
-bc1qcvxdpf4qvdhqp8ee4s355cjmxrzsphsdwpl8w4
-```
-
-**BNB Smart Chain (BNB)**
-```text
-0x055ABa1b80Bc35C836Ce7E9F47c2b3d6C75b5534
-```
-
-**Polygon**
-```text
-0x055ABa1b80Bc35C836Ce7E9F47c2b3d6C75b5534
-```
-
-Send each coin on its matching network. Coins sent on the wrong network can't be recovered.
-
-> [!NOTE]
-> Donations are voluntary gifts and are non-refundable. A donation does not buy any product, service, perk, early access, exclusive build, priority support or say in the project. Every release stays free and public for everyone.
-
-## Credits and license
-
-Lichii inherits the work of the Eglantine, Eden, yuzu and Sudachi projects and their contributors, including Eglantine's original developer Camille LaVey. Original copyright notices and third-party licenses are retained.
-
-See [LICENSE.txt](LICENSE.txt) and the source files for applicable license terms.
+And everyone who continues or had contributed to the project! <3

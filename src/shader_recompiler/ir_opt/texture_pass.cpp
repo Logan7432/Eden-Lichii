@@ -328,6 +328,10 @@ static inline u32 ReadCbufCached(Environment& env, u32 index, u32 offset) {
     return v;
 }
 
+static inline bool IsAttributeHandle(const ConstBufferAddr& cbuf) {
+    return cbuf.index == ATTRIBUTE_HANDLE_CBUF_INDEX;
+}
+
 static inline u32 GetTextureHandleCached(Environment& env, const ConstBufferAddr& cbuf) {
     // Must all be uniquely different variables
     // If has secondary, then it will be cbuf.secondary_{index|offset}, else its 0.
@@ -351,16 +355,25 @@ static inline u32 GetTextureHandleCached(Environment& env, const ConstBufferAddr
 // ImageQueryDimensions case, which has none).
 static inline TextureType ReadTextureTypeCached(Environment& env, const ConstBufferAddr& cbuf) {
     if (cbuf.handle_program != ~0U) return TextureType::Color2D;
+    if (IsAttributeHandle(cbuf)) {
+        return TextureType::Color2D;
+    }
     return env.ReadTextureType(GetTextureHandleCached(env, cbuf));
 }
 static inline TexturePixelFormat ReadTexturePixelFormatCached(Environment& env,
                                                                 const ConstBufferAddr& cbuf) {
     if (cbuf.handle_program != ~0U) return TexturePixelFormat::A8B8G8R8_UNORM;
+    if (IsAttributeHandle(cbuf)) {
+        return TexturePixelFormat::A8B8G8R8_UNORM;
+    }
     return env.ReadTexturePixelFormat(GetTextureHandleCached(env, cbuf));
 }
 static inline bool IsTexturePixelFormatIntegerCached(Environment& env,
                                                         const ConstBufferAddr& cbuf) {
     if (cbuf.handle_program != ~0U) return false;
+    if (IsAttributeHandle(cbuf)) {
+        return false;
+    }
     return env.IsTexturePixelFormatInteger(GetTextureHandleCached(env, cbuf));
 }
 
@@ -923,6 +936,18 @@ std::optional<ConstBufferAddr> TryGetConstBuffer(const IR::Inst* inst, Environme
     };
 }
 
+bool IsAttributeSourcedHandle(const IR::Value& handle) {
+    if (handle.IsImmediate()) {
+        return false;
+    }
+    const IR::Inst* inst{handle.InstRecursive()};
+    if (inst->GetOpcode() == IR::Opcode::BitCastU32F32 && !inst->Arg(0).IsImmediate()) {
+        inst = inst->Arg(0).InstRecursive();
+    }
+    return inst->GetOpcode() == IR::Opcode::GetAttribute ||
+           inst->GetOpcode() == IR::Opcode::GetAttributeU32;
+}
+
 TextureInst MakeInst(Environment& env, IR::Block* block, IR::Inst& inst, const HostTranslateInfo& host_info) {
     ConstBufferAddr addr;
     if (IsBindless(inst)) {
@@ -930,6 +955,22 @@ TextureInst MakeInst(Environment& env, IR::Block* block, IR::Inst& inst, const H
 
         if (track_addr) {
             addr = *track_addr;
+        } else if (host_info.support_attribute_texture_handle &&
+                   IsAttributeSourcedHandle(inst.Arg(0))) {
+            // The handle travels with the vertices (sprite batches pick the texture per quad), so
+            // there is no constant buffer to read it from. The host binds the handle of each run
+            // of vertices that share one.
+            addr = ConstBufferAddr{
+                .index = ATTRIBUTE_HANDLE_CBUF_INDEX,
+                .offset = 0,
+                .shift_left = 0,
+                .secondary_index = 0,
+                .secondary_offset = 0,
+                .secondary_shift_left = 0,
+                .dynamic_offset = {},
+                .count = 1,
+                .has_secondary = false,
+            };
         } else {
             // Read from a storage buffer (a handle table): computed for each draw.
             std::vector<u32> code;

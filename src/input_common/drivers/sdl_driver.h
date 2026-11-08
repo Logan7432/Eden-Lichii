@@ -9,7 +9,10 @@
 #include <atomic>
 #include <chrono>
 #include <mutex>
+#include <optional>
+#include <string>
 #include <thread>
+#include <unordered_map>
 #include "common/container/unordered_map.h"
 
 #include <SDL3/SDL.h>
@@ -46,6 +49,15 @@ public:
     /// Get the nth joystick with the corresponding GUID
     std::shared_ptr<SDLJoystick> GetSDLJoystickBySDLID(SDL_JoystickID sdl_id);
     std::shared_ptr<SDLJoystick> GetSDLJoystickByGamepadID(SDL_JoystickID sdl_id);
+
+    /// The guid and port that bindings use to address this SDL instance, if the driver has it
+    /// open. Must not be called while holding SDL_LockJoysticks (the driver locks its map).
+    std::optional<std::pair<std::string, int>> GetBindingForSDLID(SDL_JoystickID sdl_id);
+
+    /// When this SDL instance last had a deliberate input: a button or d-pad press, or a
+    /// stick or trigger past half travel (not drift, not motion)
+    std::optional<std::chrono::steady_clock::time_point> GetLastActivity(
+        SDL_JoystickID sdl_id) const;
 
     /**
      * Check how many identical joysticks (by guid) were connected before the one with sdl_id and so
@@ -119,6 +131,10 @@ private:
     ::Common::unordered_map<Common::UUID, std::vector<std::shared_ptr<SDLJoystick>>> joystick_map;
     std::mutex joystick_map_mutex;
     std::chrono::steady_clock::time_point last_motion_stall_check{};
+
+    void MarkActivity(SDL_JoystickID sdl_id);
+    std::unordered_map<SDL_JoystickID, std::chrono::steady_clock::time_point> last_activity;
+    mutable std::mutex activity_mutex;
 
     std::atomic<bool> initialized = false;
     bool start_thread;

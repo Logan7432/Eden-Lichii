@@ -2,7 +2,7 @@
 
 Are you just a casual user? Take a look at our [User Handbook](./user) then!
 
-To contribute to this fork, see [CONTRIBUTING.md](../CONTRIBUTING.md).
+If you want to register/signup as a contributor, take a gander at [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 This contains documentation created by developers, build instructions, guidelines, instructions/layouts for [cool stuff we made](./CPMUtil.md), and more.
 
@@ -25,8 +25,11 @@ This contains documentation created by developers, build instructions, guideline
   - **[HOS Kernel](./HosKernel.md)**
   - **[Settings](./Settings.md)**
 
-## Contributing
+## Policies
 
+Policies and information on development.
+
+- **[AI and LLM Usage](./CONTRIBUTING.md#policies)**
 - **[Coding guidelines](./Coding.md)**
 - **[Contributing](../CONTRIBUTING.md)**
 

@@ -5180,9 +5180,9 @@ static bool VectorSignedSaturatedShiftLeftUnsigned(VectorArray<T>& dst, const Ve
     bool qc_flag = false;
     for (size_t i = 0; i < dst.size(); i++) {
         auto const element = data[i];
-        auto const shifted = U(element) << U(T(shift_amount));
+        U const shifted = U(U(element) << U(T(shift_amount)));
         auto const shifted_test = shifted >> U(T(shift_amount));
-        auto result = 0;
+        T result = 0;
         if (element > 0 && shifted_test != U(element))
             result = T((std::numeric_limits<U>::max)());
         if (element > 0 && shifted_test == U(element))
@@ -6310,9 +6310,7 @@ void EmitX64::EmitVectorZeroExtend64(EmitContext& ctx, IR::Inst* inst) {
 void EmitX64::EmitVectorZeroUpper(EmitContext& ctx, IR::Inst* inst) {
     auto args = ctx.reg_alloc.GetArgumentInfo(inst);
     auto const a = ctx.reg_alloc.UseScratchXmm(code, args[0]);
-
     code.movq(a, a);  // TODO: !IsLastUse
-
     ctx.reg_alloc.DefineValue(code, inst, a);
 }
 

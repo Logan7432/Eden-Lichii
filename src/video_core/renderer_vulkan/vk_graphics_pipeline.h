@@ -224,6 +224,16 @@ public:
         return configure_func(this, is_indexed);
     }
 
+    /// True when a shader samples a texture whose handle arrives as a vertex attribute.
+    [[nodiscard]] bool UsesAttributeHandle() const noexcept {
+        return uses_attribute_handle;
+    }
+
+    /// Handle bound to those textures by the next Configure.
+    void SetAttributeHandle(u32 handle) noexcept {
+        attribute_handle = handle;
+    }
+
     [[nodiscard]] GraphicsPipeline* Next(const GraphicsPipelineCacheKey& current_key) noexcept {
         if (key == current_key) {
             return this;
@@ -316,6 +326,8 @@ private:
     size_t num_image_elements{};
     std::vector<SampledImage> sampled_images;
     u32 num_textures{};
+    u32 attribute_handle{};
+    bool uses_attribute_handle{};
     bool fragment_has_color0_output{};
     u32 color_output_mask{};
     bool writes_storage{};

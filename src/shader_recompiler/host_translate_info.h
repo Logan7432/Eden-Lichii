@@ -44,6 +44,8 @@ struct HostTranslateInfo {
                                         ///< control flow
     bool single_lane_geometry_subgroups{};
     bool support_byte_addressed_r16{};
+    bool support_attribute_texture_handle{}; ///< True when the host binds texture handles that
+                                             ///< arrive as vertex attributes
 
     /// The properties that change which values translation reads from the environment, a bit
     /// each: those deciding a pass that reads values, or a pass that changes the program before

@@ -325,6 +325,9 @@ GraphicsPipeline::GraphicsPipeline(
         num_textures += Shader::NumDescriptors(info->texture_descriptors);
         num_image_elements += Shader::NumDescriptors(info->texture_descriptors);
         num_image_elements += Shader::NumDescriptors(info->image_descriptors);
+        for (const auto& desc : info->texture_descriptors) {
+            uses_attribute_handle |= desc.cbuf_index == Shader::ATTRIBUTE_HANDLE_CBUF_INDEX;
+        }
         num_descriptor_entries += NumDescriptorEntries(*info);
     }
     fragment_has_color0_output = stage_infos[NUM_STAGES - 1].stores_frag_color[0];
@@ -532,6 +535,9 @@ bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
                                        },
                                        device.GetStorageBufferAlignment()),
                                    via_header_index);
+            }
+            if (desc.cbuf_index == Shader::ATTRIBUTE_HANDLE_CBUF_INDEX) {
+                return TexturePair(attribute_handle, via_header_index);
             }
             ASSERT(cbufs[desc.cbuf_index].enabled);
             const u32 index_offset{index << desc.size_shift};

@@ -8,6 +8,8 @@
 
 #include "dynarmic/backend/x64/block_of_code.h"
 
+#include <cstdlib>
+
 #ifdef _WIN32
 #    define WIN32_LEAN_AND_MEAN
 #    include <windows.h>
@@ -106,7 +108,6 @@ void ProtectMemory(const void* base, size_t size, bool is_executable) {
 
 static const HostFeature features = []() {
     HostFeature f{};
-#ifdef DYNARMIC_ENABLE_CPU_FEATURE_DETECTION
     using Cpu = Xbyak::util::Cpu;
     Xbyak::util::Cpu cpu_info{};
     if (cpu_info.has(Cpu::tSSSE3)) f |= HostFeature::SSSE3;
@@ -148,12 +149,13 @@ static const HostFeature features = []() {
             f |= HostFeature::FastBMI2;
         }
     }
-    return f;
+#ifdef DYNARMIC_HOST_FEATURE_OVERRIDE
+    // Test builds only: DYNARMIC_HOST_FEATURES=<hex mask> hides features to reach the fallbacks.
+    if (const char* mask = std::getenv("DYNARMIC_HOST_FEATURES"); mask && *mask)
+        f &= static_cast<HostFeature>(std::strtoull(mask, nullptr, 16));
 #endif
+    return f;
 }();
-HostFeature GetHostFeatures() {
-    return features;
-}
 
 #ifdef __APPLE__
 bool IsUnderRosetta() {
@@ -169,6 +171,10 @@ bool IsUnderRosetta() {
 #endif
 
 }  // anonymous namespace
+
+HostFeature GetHostFeatures() {
+    return features;
+}
 
 BlockOfCode::BlockOfCode(RunCodeCallbacks cb, JitStateInfo jsi, size_t total_code_size, std::function<void(BlockOfCode&)> rcp)
     : Xbyak::CodeGenerator(total_code_size

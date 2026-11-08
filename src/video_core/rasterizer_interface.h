@@ -189,12 +189,6 @@ public:
         }
     }
 
-    virtual bool TryCacheInvalidation(DAddr addr, u64 size) {
-        if (MustFlushRegion(addr, size, VideoCommon::CacheType::BufferCache)) return false;
-        OnCacheInvalidation(addr, size);
-        return true;
-    }
-
     virtual bool OnCPUWrite(PAddr addr, u64 size) = 0;
 
     /// Sync memory between guest and host.

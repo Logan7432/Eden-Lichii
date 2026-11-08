@@ -273,9 +273,13 @@ public:
         if (format == VideoCore::Surface::PixelFormat::Invalid) {
             format = VideoCore::Surface::PixelFormat::R8_UNORM;
         }
-        guest_descriptor_queue.AddTexelBuffer(buffer.View(offset, size, format),
-                                              buffer.DeviceAddress(), offset, size,
-                                              TexelBufferFormat(format));
+        if (guest_descriptor_queue.UsesDescriptorBuffer()) {
+            const VkDeviceAddress address = buffer.DeviceAddress();
+            const VkFormat vk_format = address == 0 ? VK_FORMAT_UNDEFINED : TexelBufferFormat(format);
+            guest_descriptor_queue.AddTexelBuffer(VK_NULL_HANDLE, address, offset, size, vk_format);
+        } else {
+            guest_descriptor_queue.AddTexelBuffer(buffer.View(offset, size, format));
+        }
     }
 
     bool ShouldLimitDynamicStorageBuffers() const {
