@@ -570,6 +570,7 @@ private:
     int configure_start_category = -1;
     int configure_start_tab = 0;
     QPushButton* lsfg_button = nullptr;
+    QPushButton* calibrate_button = nullptr;
     QActionGroup* prompt_style_actions = nullptr;
     QPushButton* gpu_accuracy_button = nullptr;
     QPushButton* renderer_status_button = nullptr;

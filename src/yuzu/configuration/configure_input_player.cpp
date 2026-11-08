@@ -10,14 +10,12 @@
 #include <string>
 #include <utility>
 #include <QComboBox>
-#include <QElapsedTimer>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QInputDialog>
 #include <QMenu>
 #include <QMessageBox>
 #include <QMouseEvent>
-#include <QProgressDialog>
 #include <QTimer>
 #include <QToolButton>
 #include <QVBoxLayout>
@@ -27,6 +25,7 @@
 #include "hid_core/frontend/emulated_controller.h"
 #include "hid_core/hid_core.h"
 #include "hid_core/hid_types.h"
+#include "yuzu/util/gyro_calibration.h"
 #include "input_common/drivers/keyboard.h"
 #include "input_common/drivers/mouse.h"
 #include "input_common/main.h"
@@ -2045,64 +2044,7 @@ void ConfigureInputPlayer::CalibrateMotion(
     if (timeout_timer->isActive()) {
         return;
     }
-    if (!emulated_controller->StartMotionCalibration(motion_slots)) {
-        QMessageBox::information(this, tr("Calibrate Motion"),
-                                 tr("No active gyro was detected for this controller."));
-        return;
-    }
-
-    const QString place_text = tr("Place the controller on a flat surface with the buttons facing "
-                                  "up and don't touch it.");
-    QProgressDialog progress(place_text, tr("Cancel"), 0, 100, this);
-    progress.setWindowTitle(tr("Calibrate Motion"));
-    progress.setWindowModality(Qt::WindowModal);
-    progress.setMinimumDuration(0);
-    progress.setAutoClose(false);
-    progress.setAutoReset(false);
-    progress.setValue(0);
-
-    auto result = Core::HID::MotionCalibrationState::Idle;
-    QElapsedTimer elapsed;
-    elapsed.start();
-    QTimer status_timer;
-    connect(&status_timer, &QTimer::timeout, &progress, [&] {
-        const Core::HID::MotionCalibrationStatus status =
-            emulated_controller->GetMotionCalibrationStatus();
-        switch (status.state) {
-        case Core::HID::MotionCalibrationState::Calibrating:
-            progress.setLabelText(tr("Calibrating... keep the controller still."));
-            progress.setValue(static_cast<int>(status.progress * 100.0f));
-            break;
-        case Core::HID::MotionCalibrationState::Done:
-        case Core::HID::MotionCalibrationState::Failed:
-            result = status.state;
-            progress.accept();
-            return;
-        default:
-            progress.setLabelText(place_text);
-            progress.setValue(0);
-            break;
-        }
-        if (elapsed.elapsed() > 25000) {
-            result = Core::HID::MotionCalibrationState::Failed;
-            progress.accept();
-        }
-    });
-    status_timer.start(50);
-    progress.exec();
-    status_timer.stop();
-
-    if (result == Core::HID::MotionCalibrationState::Done) {
-        QMessageBox::information(this, tr("Calibrate Motion"),
-                                 tr("Calibration complete. The gyro is now in sync."));
-        return;
-    }
-    emulated_controller->CancelMotionCalibration();
-    if (result == Core::HID::MotionCalibrationState::Failed) {
-        QMessageBox::warning(this, tr("Calibrate Motion"),
-                             tr("Calibration failed. Place the controller on a flat surface with "
-                                "the buttons facing up, don't touch it, and try again."));
-    }
+    GyroCalibration::Run(this, emulated_controller, motion_slots);
 }
 
 void ConfigureInputPlayer::UpdateControllerButtonNames() {

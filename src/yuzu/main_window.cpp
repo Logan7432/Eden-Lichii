@@ -80,6 +80,7 @@
 
 #include "util/clickable_label.h"
 #include "util/controller_navigation.h"
+#include "util/gyro_calibration.h"
 #include "util/gamescope.h"
 #include "util/overlay_dialog.h"
 
@@ -1532,6 +1533,15 @@ void MainWindow::InitializeWidgets() {
             });
     statusBar()->insertPermanentWidget(0, frame_gen_status_button);
     frame_gen_status_button->setVisible(false);
+
+    calibrate_button = new QPushButton(tr("Calibrate"));
+    calibrate_button->setObjectName(QStringLiteral("TogglableStatusBarButton"));
+    calibrate_button->setFocusPolicy(Qt::NoFocus);
+    calibrate_button->setToolTip(tr("Calibrate the gyro of player 1's controller. Place it on a "
+                                    "flat surface with the buttons facing up first."));
+    connect(calibrate_button, &QPushButton::clicked, this,
+            [this] { GyroCalibration::RunForActivePlayer(this); });
+    statusBar()->insertPermanentWidget(0, calibrate_button);
 
     lsfg_button = new QPushButton();
     lsfg_button->setObjectName(QStringLiteral("FrameGenStatusBarButton"));
