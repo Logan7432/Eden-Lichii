@@ -330,7 +330,7 @@ static int PlatformMapReadOnly(IOFile& io, const wchar_t* path) {
             if (io.mmap_base) {
                 _LARGE_INTEGER pvalue;
                 GetFileSizeEx(io.file_handle, &pvalue);
-                io.mmap_size = uint32_t(pvalue.QuadPart);
+                io.mmap_size = size_t(pvalue.QuadPart);
             } else {
                 CloseHandle(io.mapping_handle);
                 CloseHandle(io.file_handle);
