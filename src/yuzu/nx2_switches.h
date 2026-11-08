@@ -65,7 +65,10 @@ static std::filesystem::path GetSwitchExeDirectory(const char* argv0) {
 
 static void LoadNx2Switches(const char* argv0) {
     // Later files overwrite earlier entries; the real environment is checked only at the end.
-    std::map<std::string, std::string> entries;
+    std::map<std::string, std::string> entries{
+        {"EDEN_NX2_SPLIT", "2"},
+        {"EDEN_NX2_FENCE_BATCH", "1"},
+    };
     if (const auto exe_dir = GetSwitchExeDirectory(argv0); !exe_dir.empty()) {
         ParseSwitchFile(exe_dir / "nx2_switches.txt", entries);
     }
