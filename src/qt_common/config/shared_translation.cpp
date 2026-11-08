@@ -469,8 +469,7 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
               "it bypasses such prompts and directly exits the emulation."));
     INSERT(UISettings, hide_mouse, tr("Hide mouse on inactivity"),
            tr("Hides the mouse after 2.5s of inactivity."));
-    INSERT(UISettings, check_for_updates, tr("Check for updates"),
-           tr("Whether or not to check for updates upon startup."));
+    INSERT(UISettings, check_for_updates, QString(), QString());
 
     // Linux
     INSERT(UISettings, enable_gamemode, tr("Enable Gamemode"), QString());

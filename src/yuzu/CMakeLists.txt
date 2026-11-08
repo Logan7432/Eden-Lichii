@@ -285,7 +285,7 @@ add_executable(yuzu
     game/carousel.h game/carousel.cpp
 )
 
-set_target_properties(yuzu PROPERTIES OUTPUT_NAME "lichii")
+set_target_properties(yuzu PROPERTIES OUTPUT_NAME "eden")
 
 # Shipped next to the executable: the NX2 switches a GUI launch cannot set another way. Read at
 # startup (LoadNx2Switches in main.cpp); a user copy in %APPDATA%\eden overrides it.
@@ -415,10 +415,10 @@ if (APPLE)
 
     # Use the supplied Lichii artwork for all macOS generators.
     set(_dist "${CMAKE_SOURCE_DIR}/dist")
-    set(_icons "${_dist}/lichii.icns")
+    set(_icons "${_dist}/eden.icns")
     if (CMAKE_GENERATOR MATCHES "Xcode")
         set_target_properties(yuzu PROPERTIES
-            MACOSX_BUNDLE_ICON_FILE lichii.icns
+            MACOSX_BUNDLE_ICON_FILE eden.icns
             # Also force xcode to manage signing for us.
             XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED ON
             XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED ON)

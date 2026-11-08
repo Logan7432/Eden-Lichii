@@ -74,6 +74,7 @@ endif()
 option(ENABLE_QT "Enable the Qt frontend" ON)
 option(ENABLE_QT_TRANSLATION "Enable translations for the Qt frontend" OFF)
 option(ENABLE_UPDATE_CHECKER "Enable update checker (for Qt and Android)" OFF)
+set(ENABLE_UPDATE_CHECKER OFF)
 set(LICHII_BUILD_TAG "" CACHE STRING "Published build-N release tag; empty for local builds")
 set(LICHII_BUILD_PLATFORM "" CACHE STRING "Release asset platform and variant, such as linux-x86_64-pgo")
 cmake_dependent_option(YUZU_USE_QT_MULTIMEDIA "Use QtMultimedia for Camera"  OFF "NOT YUZU_USE_BUNDLED_QT" OFF)
@@ -758,15 +759,14 @@ endif()
 
 # TODO: Icon/install handling n such should be put into dist/CMakeLists.txt
 if(ENABLE_QT AND UNIX AND NOT APPLE)
-    install(FILES "dist/io.github.zortos293.lichii.desktop"
+    install(FILES "dist/dev.eden_emu.eden.desktop"
         DESTINATION "share/applications")
-    install(FILES "dist/lichii.png"
-        DESTINATION "share/icons/hicolor/256x256/apps"
-        RENAME "io.github.zortos293.lichii.png")
+    install(FILES "dist/dev.eden_emu.eden.svg"
+        DESTINATION "share/icons/hicolor/scalable/apps")
 
-    install(FILES "dist/io.github.zortos293.lichii.xml"
+    install(FILES "dist/dev.eden_emu.eden.xml"
         DESTINATION "share/mime/packages")
-    install(FILES "dist/io.github.zortos293.lichii.metainfo.xml"
+    install(FILES "dist/dev.eden_emu.eden.metainfo.xml"
         DESTINATION "share/metainfo")
 endif()
 
