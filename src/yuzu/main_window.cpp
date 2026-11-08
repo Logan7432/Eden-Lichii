@@ -1537,10 +1537,14 @@ void MainWindow::InitializeWidgets() {
     calibrate_button = new QPushButton(tr("Calibrate"));
     calibrate_button->setObjectName(QStringLiteral("TogglableStatusBarButton"));
     calibrate_button->setFocusPolicy(Qt::NoFocus);
+    calibrate_button->setCheckable(true);
+    calibrate_button->setChecked(true);
     calibrate_button->setToolTip(tr("Calibrate the gyro of player 1's controller. Place it on a "
                                     "flat surface with the buttons facing up first."));
-    connect(calibrate_button, &QPushButton::clicked, this,
-            [this] { GyroCalibration::RunForActivePlayer(this); });
+    connect(calibrate_button, &QPushButton::clicked, this, [this] {
+        calibrate_button->setChecked(true);
+        GyroCalibration::RunForActivePlayer(this);
+    });
     statusBar()->insertPermanentWidget(0, calibrate_button);
 
     lsfg_button = new QPushButton();
@@ -9679,6 +9683,8 @@ void MainWindow::UpdateStatusBarIcons() {
         EdenUi::StateIcon(Icon::Speaker, t.text, Icon::Speaker, t.text_faint, 14));
     lsfg_button->setIcon(
         EdenUi::StateIcon(Icon::FrameGen, t.accent, Icon::FrameGen, t.text_faint, 14));
+    calibrate_button->setIcon(
+        EdenUi::StateIcon(Icon::Controller, t.text, Icon::Controller, t.text_faint, 14));
     firmware_label->setIcon(EdenUi::IconPixmap(Icon::Chip, 14, t.text_dim));
     refresh_button->setIcon(EdenUi::IconPixmap(Icon::Refresh, 16, t.text_dim));
     if (multiplayer_state) {
@@ -9715,21 +9721,36 @@ void MainWindow::UpdateTopBar() {
             device_icon = handheld ? Library::Icon::Handheld : Library::Icon::Controller;
             device_name = tr("Disconnected");
             if (input_subsystem) {
-                for (const auto& device : input_subsystem->GetInputDevices()) {
-                    if (device.Get("engine", "") == engine &&
-                        device.Get("guid", "") == param.Get("guid", "") &&
-                        device.Get("port", 0) == param.Get("port", 0)) {
-                        static const QRegularExpression trailing_index(
-                            QStringLiteral("\\s+\\d+$"));
-                        device_name = QString::fromStdString(device.Get("display", ""))
-                                          .remove(trailing_index)
-                                          .trimmed();
-                        if (device_name.isEmpty()) {
-                            device_name = tr("Controller");
-                        }
-                        present = true;
-                        break;
+                const Common::ParamPackage left_param =
+                    controller->GetButtonParam(Settings::NativeButton::L);
+                const auto devices = input_subsystem->GetInputDevices();
+                const auto same_device = [&engine](const Common::ParamPackage& device,
+                                                   const Common::ParamPackage& button) {
+                    return device.Get("engine", "") == engine &&
+                           device.Get("guid", "") == button.Get("guid", "") &&
+                           device.Get("port", 0) == button.Get("port", 0);
+                };
+                auto found = devices.end();
+                if (left_param.Get("guid", "") != param.Get("guid", "")) {
+                    found = std::find_if(devices.begin(), devices.end(), [&](const auto& device) {
+                        return same_device(device, left_param) &&
+                               device.Get("guid2", "") == param.Get("guid", "");
+                    });
+                }
+                if (found == devices.end()) {
+                    found = std::find_if(devices.begin(), devices.end(), [&](const auto& device) {
+                        return same_device(device, param);
+                    });
+                }
+                if (found != devices.end()) {
+                    static const QRegularExpression trailing_index(QStringLiteral("\\s+\\d+$"));
+                    device_name = QString::fromStdString(found->Get("display", ""))
+                                      .remove(trailing_index)
+                                      .trimmed();
+                    if (device_name.isEmpty()) {
+                        device_name = tr("Controller");
                     }
+                    present = true;
                 }
             }
         }

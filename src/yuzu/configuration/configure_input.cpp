@@ -1041,9 +1041,9 @@ QWidget* ConfigureInput::PlayerTab(int player) const {
 QList<QWidget*> ConfigureInput::GetSubTabs() const {
     // The settings dialog shows these, not this widget's own tab bar
     return {
-        assignment,     ui->tabAdvanced, ui->tabPlayer1, ui->tabPlayer2, ui->tabPlayer3,
-        ui->tabPlayer4, ui->tabPlayer5,  ui->tabPlayer6, ui->tabPlayer7, ui->tabPlayer8,
-        microphone,
+        ui->tabPlayer1, ui->tabPlayer2, ui->tabPlayer3, ui->tabPlayer4, ui->tabPlayer5,
+        ui->tabPlayer6, ui->tabPlayer7, ui->tabPlayer8, microphone,      assignment,
+        ui->tabAdvanced,
     };
 }
 
