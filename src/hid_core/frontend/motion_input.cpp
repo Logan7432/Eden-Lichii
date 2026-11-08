@@ -145,7 +145,7 @@ void MotionInput::UpdateCalibration(u64 elapsed_time) {
 
     const f32 accel_length = accel.Length();
     const bool is_face_up =
-        accel_length >= 0.9f && accel_length <= 1.1f && accel.z <= CalibrationFaceUpLimit;
+        accel_length >= 0.9f && accel_length <= 1.1f && accel[2] <= CalibrationFaceUpLimit;
     if (!is_face_up) {
         calibration_state = MotionCalibrationState::WaitingForFlat;
         RestartCalibrationWindow();
@@ -154,9 +154,9 @@ void MotionInput::UpdateCalibration(u64 elapsed_time) {
 
     if (calibration_counter > 0) {
         const bool is_repeated_sample =
-            raw_gyro.x == calibration_last_gyro.x && raw_gyro.y == calibration_last_gyro.y &&
-            raw_gyro.z == calibration_last_gyro.z && accel.x == calibration_last_accel.x &&
-            accel.y == calibration_last_accel.y && accel.z == calibration_last_accel.z;
+            raw_gyro[0] == calibration_last_gyro[0] && raw_gyro[1] == calibration_last_gyro[1] &&
+            raw_gyro[2] == calibration_last_gyro[2] && accel[0] == calibration_last_accel[0] &&
+            accel[1] == calibration_last_accel[1] && accel[2] == calibration_last_accel[2];
         if (is_repeated_sample) {
             return;
         }
@@ -186,8 +186,12 @@ void MotionInput::FinishCalibration() {
     const f32 count = static_cast<f32>(calibration_counter);
     gyro_bias = calibration_gyro_sum / count;
     const Common::Vec<f32, 3> gravity = (calibration_accel_sum / count).Normalized();
-    quat.w = 0.0f;
-    quat.xyz = Common::Vec<f32, 3>{gravity.x, -gravity.y, gravity.z - 1.0f}.Normalized();
+    const Common::Vec<f32, 3> axis =
+        Common::Vec<f32, 3>{gravity[0], -gravity[1], gravity[2] - 1.0f}.Normalized();
+    quat[0] = axis[0];
+    quat[1] = axis[1];
+    quat[2] = axis[2];
+    quat[3] = 0.0f;
     gyro = {};
     real_error = {};
     integral_error = {};
