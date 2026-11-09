@@ -338,7 +338,7 @@ try {
 
     $targets = @('yuzu')
 
-    $env:_CL_ = '/MP4'
+    $env:_CL_ = '/MP4 /wd4456 /wd4458'
     foreach ($target in $targets) {
         Write-Step "Building $target (Release, 2 projects at a time, 4 compilers each, Idle priority)"
         $started = Get-Date
