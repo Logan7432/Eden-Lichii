@@ -12,7 +12,10 @@
 #include <string_view>
 #include <utility>
 
+#include <fmt/format.h>
+
 #include "common/logging.h"
+#include "common/swap.h"
 #include "core/hle/service/friend/resort_doc_adapter.h"
 #include "core/hle/service/friend/resort_doc_bus.h"
 #include "core/hle/service/friend/resort_lan_friends.h"
@@ -31,6 +34,17 @@ constexpr u32 RoomHash = 0x57D9634C;
 constexpr u32 RoomrHash = 0xD7CB3179;
 constexpr u32 UserdocHash = 0x4C687DDD;
 constexpr u32 MemberCollection = 0xEDB50001;
+constexpr u32 LanCollection = 0xEDB50002;
+constexpr std::string_view LanKey = "lan";
+constexpr std::size_t LanBodySize = 12;
+constexpr std::chrono::seconds LanBeat{1};
+constexpr std::chrono::seconds LanStale{3};
+constexpr std::chrono::seconds LanTargetLife{30};
+constexpr std::chrono::seconds LanAdoptWindow{5};
+constexpr s32 LobbyNone = 0;
+constexpr s32 LobbyHost = 1;
+constexpr s32 LobbyRejoin = 2;
+constexpr s32 LobbyWait = 3;
 constexpr std::size_t RecordSize = 0x40;
 constexpr std::size_t EventHeaderSize = 0x20;
 constexpr std::size_t SnapshotEntrySize = 0x18;
@@ -50,6 +64,22 @@ struct Event {
     std::string name;
     std::vector<u8> bytes;
     std::vector<u32> pointers;
+};
+
+struct LanTrack {
+    u64 lobby{};
+    bool up{};
+    u32 beat{};
+    std::chrono::steady_clock::time_point next_beat{};
+    std::optional<std::chrono::steady_clock::time_point> seen;
+    u32 last_gen{};
+    std::chrono::steady_clock::time_point gen_since{};
+    bool had{};
+    std::chrono::steady_clock::time_point had_since{};
+    u32 target_gen{};
+    std::chrono::steady_clock::time_point target_time{};
+    u32 joined_gen{};
+    u32 rejoin_gen{};
 };
 
 struct State {
@@ -77,6 +107,8 @@ struct State {
     bool member_seen{};
     u32 local_tries{};
     std::chrono::steady_clock::time_point next_local_try{};
+    u32 lan_gen{};
+    LanTrack lan;
 };
 
 State& GetState() {
@@ -543,8 +575,30 @@ void Queue(State& state, Event&& event, u64& last) {
     state.outbox.push_back(std::move(event));
 }
 
+void SyncLan(State& state, u64 lobby) {
+    if (state.lan.lobby != lobby) {
+        state.lan = {};
+        state.lan.lobby = lobby;
+    }
+}
+
+void NoteLanDoc(State& state, const DocView& doc) {
+    const auto now = std::chrono::steady_clock::now();
+    state.lan.seen = now;
+    if (doc.body.size() < LanBodySize) {
+        return;
+    }
+    u32 gen{};
+    std::memcpy(&gen, doc.body.data(), 4);
+    if (gen != state.lan.last_gen) {
+        state.lan.last_gen = gen;
+        state.lan.gen_since = now;
+    }
+}
+
 void Drain(State& state, DocBus& bus) {
     const auto identity = bus.Identity();
+    SyncLan(state, identity.lobby);
     if (identity.lobby != state.lobby) {
         LOG_INFO(Service_Friend, "ResortDocs lobby {:016x} -> {:016x}", state.lobby,
                  identity.lobby);
@@ -562,6 +616,9 @@ void Drain(State& state, DocBus& bus) {
         state.epoch = result.epoch;
         state.cursor = result.next_cursor;
         for (const auto& change : result.changes) {
+            if (change.collection == LanCollection) {
+                NoteLanDoc(state, change);
+            }
             MarkDirty(state, change.collection);
             if (change.collection == RoomHash || change.collection == RoomrHash ||
                 change.collection == UserdocHash) {
@@ -771,6 +828,154 @@ s32 PublishLeave(State& state, const std::string& room_id) {
     return status == Status::Ok ? 0 : 0x10 + static_cast<s32>(status);
 }
 
+u32 IpValue(const Network::IPv4Address& ip) {
+    return static_cast<u32>(ip[0]) << 24 | static_cast<u32>(ip[1]) << 16 |
+           static_cast<u32>(ip[2]) << 8 | static_cast<u32>(ip[3]);
+}
+
+bool LobbyHostOnline(u32 host_ip) {
+    const auto hosts = CollectResortRoomHosts();
+    return std::ranges::any_of(
+        hosts, [host_ip](const ResortRoomFriend& host) { return IpValue(host.ip) == host_ip; });
+}
+
+bool ValueIsTrue(std::span<const u8> value) {
+    std::size_t pos = 0;
+    while (pos < value.size()) {
+        u32 field{};
+        u32 wire{};
+        std::span<const u8> bytes;
+        u64 number{};
+        if (!NextField(value, pos, field, wire, bytes, number)) {
+            return false;
+        }
+        if (wire == 0 && number != 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool HostInPlay(DocBus& bus, u32 host_ip) {
+    const std::array<std::string, 2> uids{fmt::format("{:08x}", host_ip), std::string{}};
+    const std::string own_room = "r" + uids[0];
+    for (const auto& doc : bus.List(RoomHash)) {
+        if (doc.key != own_room && !RoomListsMember(doc.body, uids)) {
+            continue;
+        }
+        const auto entries = ParseMap(doc.body);
+        if (!entries) {
+            continue;
+        }
+        const auto it =
+            std::ranges::find(*entries, std::string_view{"iplay"}, &Entries::value_type::first);
+        if (it != entries->end() && ValueIsTrue(it->second)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void PublishLan(State& state, DocBus& bus) {
+    std::array<u8, LanBodySize> body{};
+    const u32 up = state.lan.up ? 1 : 0;
+    std::memcpy(body.data(), &state.lan_gen, 4);
+    std::memcpy(body.data() + 4, &state.lan.beat, 4);
+    std::memcpy(body.data() + 8, &up, 4);
+    const auto status = bus.Publish(LanCollection, LanKey, body, 0, ExpectAny, nullptr, nullptr);
+    if (status != Status::Ok) {
+        LOG_WARNING(Service_Friend, "ResortDocs LAN session state publish failed: status {}",
+                    static_cast<u32>(status));
+    }
+}
+
+s32 LobbyQuery(State& state, bool has_session, bool at_start) {
+    if (!EnsureActive(state)) {
+        return LobbyNone;
+    }
+    auto& bus = GetResortDocBus();
+    const auto identity = bus.Identity();
+    SyncLan(state, identity.lobby);
+    auto& lan = state.lan;
+    if (identity.lobby == 0) {
+        return LobbyNone;
+    }
+    const u32 host_ip = static_cast<u32>(identity.lobby);
+    const auto now = std::chrono::steady_clock::now();
+    if (host_ip == identity.ip) {
+        const bool hosting = IsResortHosting();
+        const bool up = has_session && hosting;
+        const bool changed = up != lan.up;
+        if (changed) {
+            lan.up = up;
+            if (up && ++state.lan_gen == 0) {
+                ++state.lan_gen;
+            }
+            LOG_INFO(Service_Friend, "ResortDocs Friend Lobby LAN session {} (generation {})",
+                     up ? "up" : "down", state.lan_gen);
+        }
+        if (changed || (up && now >= lan.next_beat)) {
+            ++lan.beat;
+            lan.next_beat = now + LanBeat;
+            PublishLan(state, bus);
+        }
+        return hosting ? LobbyHost : LobbyNone;
+    }
+    if (!LobbyHostOnline(host_ip)) {
+        return LobbyNone;
+    }
+    const s32 target = static_cast<s32>(Common::swap32(host_ip));
+    if (target >= -16 && target <= LobbyWait) {
+        return LobbyNone;
+    }
+    bool doc_up = false;
+    u32 gen{};
+    DocView doc{};
+    if (bus.Get(LanCollection, LanKey, 0, doc) == Status::Ok && doc.body.size() >= LanBodySize) {
+        u32 up{};
+        std::memcpy(&gen, doc.body.data(), 4);
+        std::memcpy(&up, doc.body.data() + 8, 4);
+        doc_up = up != 0 && gen != 0;
+    }
+    const bool fresh = doc_up && lan.seen && now - *lan.seen <= LanStale;
+    if (!has_session) {
+        lan.had = false;
+        lan.joined_gen = 0;
+        lan.target_gen = doc_up ? gen : 0;
+        lan.target_time = now;
+        if (fresh || (at_start && doc_up && !HostInPlay(bus, host_ip))) {
+            return target;
+        }
+        return LobbyWait;
+    }
+    if (!lan.had) {
+        lan.had = true;
+        lan.had_since = now;
+        if (lan.target_gen != 0 && now - lan.target_time <= LanTargetLife) {
+            lan.joined_gen = lan.target_gen;
+        } else {
+            lan.joined_gen = doc_up ? gen : 0;
+        }
+        lan.target_gen = 0;
+    }
+    if (!doc_up) {
+        return LobbyWait;
+    }
+    if (lan.joined_gen == 0 && lan.gen_since <= lan.had_since + LanAdoptWindow) {
+        lan.joined_gen = gen;
+    }
+    if (gen == lan.joined_gen) {
+        return fresh ? target : LobbyWait;
+    }
+    if (lan.rejoin_gen != gen) {
+        lan.rejoin_gen = gen;
+        LOG_INFO(Service_Friend,
+                 "ResortDocs LAN session is from lobby host generation {}, host is on {}: rejoining",
+                 lan.joined_gen, gen);
+    }
+    return LobbyRejoin;
+}
+
 } // Anonymous namespace
 
 s32 GameQuery(std::span<const u8> in) {
@@ -781,11 +986,18 @@ s32 GameQuery(std::span<const u8> in) {
     u32 kind{};
     std::memcpy(&magic, in.data(), 4);
     std::memcpy(&kind, in.data() + 4, 4);
-    if (magic != QueryMagic || kind != 1) {
+    if (magic != QueryMagic || (kind != 1 && kind != 2)) {
         return -2;
     }
     auto& state = GetState();
     std::scoped_lock lock{state.mutex};
+    if (kind == 2) {
+        u32 flags{};
+        if (in.size() >= 12) {
+            std::memcpy(&flags, in.data() + 8, 4);
+        }
+        return LobbyQuery(state, (flags & 1) != 0, (flags & 2) != 0);
+    }
     return EnsureActive(state) ? 1 : 0;
 }
 
@@ -967,6 +1179,7 @@ void ResetGameAdapter() {
     state.member_seen = false;
     state.local_tries = 0;
     state.next_local_try = {};
+    state.lan = {};
 }
 
 } // namespace Service::Friend::ResortBus
