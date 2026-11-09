@@ -59,20 +59,65 @@ void Move(const fs::path& from, const fs::path& to, std::error_code& ec) {
     }
 }
 
-std::set<fs::path> ReadManifest(const fs::path& install_dir) {
+constexpr std::string_view ManifestMark = "#eden-manifest 2";
+
+struct Manifest {
     std::set<fs::path> files;
-    std::ifstream stream{install_dir / ManifestName};
+    bool marked = false;
+};
+
+Manifest ReadManifest(const fs::path& folder) {
+    Manifest manifest;
+    std::ifstream stream{folder / ManifestName};
+    bool first = true;
     for (std::string line; std::getline(stream, line);) {
         if (!line.empty() && line.back() == '\r') {
             line.pop_back();
         }
+        if (first) {
+            first = false;
+            if (line == ManifestMark) {
+                manifest.marked = true;
+                continue;
+            }
+        }
         const fs::path relative{line};
-        if (!line.empty() && relative.is_relative() &&
+        if (!line.empty() && !line.starts_with('#') && relative.is_relative() &&
             std::ranges::none_of(relative, [](const fs::path& part) { return part == ".."; })) {
-            files.insert(relative);
+            manifest.files.insert(relative);
         }
     }
-    return files;
+    return manifest;
+}
+
+bool WriteManifest(const fs::path& folder, const std::set<fs::path>& files) {
+    std::ofstream stream{folder / ManifestName, std::ios::binary | std::ios::trunc};
+    stream << ManifestMark << '\n';
+    for (const auto& relative : files) {
+        stream << relative.generic_string() << '\n';
+    }
+    stream.close();
+    return !stream.fail();
+}
+
+void RescueUntrackedBackupFiles(const fs::path& backup, const fs::path& install_dir) {
+    std::error_code ec;
+    if (!fs::is_directory(backup, ec) || ReadManifest(backup).marked) {
+        return;
+    }
+    std::vector<fs::path> files;
+    for (fs::recursive_directory_iterator it{backup, ec}, end; !ec && it != end;
+         it.increment(ec)) {
+        if (it->is_regular_file(ec)) {
+            files.push_back(fs::relative(it->path(), backup, ec));
+        }
+    }
+    for (const auto& relative : files) {
+        if (relative == fs::path{ManifestName} || fs::exists(install_dir / relative, ec)) {
+            continue;
+        }
+        Move(backup / relative, install_dir / relative, ec);
+    }
 }
 
 struct Step {
@@ -227,25 +272,37 @@ bool Install(const fs::path& staging, const fs::path& install_dir, std::error_co
     // A fresh update is the whole new version. A backup brings its own manifest, which lists the
     // whole version it holds, while its files are only the ones that changed.
     const fs::path manifest_name{ManifestName};
-    auto target_manifest = ReadManifest(staging);
-    if (target_manifest.empty()) {
-        target_manifest = new_files;
-        std::ofstream stream{staging / manifest_name, std::ios::binary};
+    const auto installed = ReadManifest(install_dir);
+    const auto staged = ReadManifest(staging);
+    std::set<fs::path> target_manifest;
+    if (staged.marked) {
+        for (const auto& relative : staged.files) {
+            if (new_files.contains(relative) ||
+                (installed.marked && installed.files.contains(relative))) {
+                target_manifest.insert(relative);
+            }
+        }
+    } else if (!staged.files.empty()) {
         for (const auto& relative : new_files) {
-            stream << relative.generic_string() << '\n';
+            if (installed.marked && installed.files.contains(relative)) {
+                target_manifest.insert(relative);
+            }
         }
-        if (!stream.good()) {
-            ec = std::make_error_code(std::errc::io_error);
-            return false;
-        }
+    } else {
+        target_manifest = new_files;
+    }
+    if (!WriteManifest(staging, target_manifest)) {
+        ec = std::make_error_code(std::errc::io_error);
+        return false;
     }
     new_files.insert(manifest_name);
 
     std::vector<fs::path> obsolete;
-    const auto installed_manifest = ReadManifest(install_dir);
-    for (const auto& relative : installed_manifest) {
-        if (!target_manifest.contains(relative) && !IsProtected(relative)) {
-            obsolete.push_back(relative);
+    if (installed.marked) {
+        for (const auto& relative : installed.files) {
+            if (!target_manifest.contains(relative) && !IsProtected(relative)) {
+                obsolete.push_back(relative);
+            }
         }
     }
 
@@ -259,30 +316,20 @@ bool Install(const fs::path& staging, const fs::path& install_dir, std::error_co
 
     // Without a manifest from an earlier update, record the files that are there now, so that
     // restoring this backup knows the whole version it brings back.
-    if (installed_manifest.empty()) {
-        std::ofstream stream{pending_backup / manifest_name, std::ios::binary};
-        for (const auto& entry : fs::directory_iterator{install_dir, ec}) {
-            const auto name = entry.path().filename();
-            if (name.generic_string().starts_with('.') || IsProtected(name)) {
-                continue;
-            }
-            if (entry.is_regular_file(ec)) {
-                stream << name.generic_string() << '\n';
-                continue;
-            }
-            for (fs::recursive_directory_iterator it{entry.path(), ec}, end; !ec && it != end;
-                 it.increment(ec)) {
-                if (it->is_regular_file(ec)) {
-                    stream << fs::relative(it->path(), install_dir).generic_string() << '\n';
-                }
+    if (!fs::exists(install_dir / manifest_name, ec)) {
+        std::set<fs::path> replaced;
+        for (const auto& relative : new_files) {
+            if (relative != manifest_name && fs::is_regular_file(install_dir / relative, ec)) {
+                replaced.insert(relative);
             }
         }
-        if (ec || !stream.good()) {
+        if (!WriteManifest(pending_backup, replaced)) {
             fs::remove_all(pending_backup, ec);
             ec = std::make_error_code(std::errc::io_error);
             return false;
         }
     }
+    ec.clear();
 
     std::vector<Step> steps;
     const auto roll_back = [&] {
@@ -332,6 +379,9 @@ bool Install(const fs::path& staging, const fs::path& install_dir, std::error_co
 
     // The new version is in place, so a backup that cannot be swapped no longer fails the install.
     std::error_code cleanup_ec;
+    if (!fs::equivalent(staging, backup, cleanup_ec)) {
+        RescueUntrackedBackupFiles(backup, install_dir);
+    }
     fs::remove_all(backup, cleanup_ec);
     fs::rename(pending_backup, backup, cleanup_ec);
     if (!fs::equivalent(staging, backup, cleanup_ec)) {

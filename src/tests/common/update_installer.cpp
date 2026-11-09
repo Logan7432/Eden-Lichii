@@ -187,7 +187,7 @@ TEST_CASE("Install replaces files, adds new ones and keeps the old ones as a bac
     CHECK_FALSE(fs::exists(backup / "user"));
     CHECK(Files(install / "user") == std::set<std::string>{"config/qt-config.ini"});
     CHECK(Read(install / "install-manifest.txt") ==
-          "Qt6Core.dll\nlichii.exe\nplugins/b.dll\n");
+          "#eden-manifest 2\n" "Qt6Core.dll\nlichii.exe\nplugins/b.dll\n");
     CHECK_FALSE(fs::exists(install / ".update-backup.tmp"));
 }
 
@@ -243,8 +243,87 @@ TEST_CASE("Restoring the backup brings back the previous version and can be undo
     REQUIRE(UpdateInstaller::Install(install / ".update-backup", install, ec));
     CHECK(Read(install / "lichii.exe") == "v2");
     CHECK(Read(install / "new.dll") == "v2 only");
-    CHECK_FALSE(fs::exists(install / "gone.dll"));
+    CHECK(Read(install / "gone.dll") == "v1 only");
     CHECK(Read(install / "user/data.bin") == "mine");
+}
+
+TEST_CASE("Updates and restores never move files no update installed", "[updater]") {
+    TempDir dir;
+    const auto install = dir.path / "app";
+    Put(install, "lichii.exe", "v1");
+    Put(install, "Emulator/Games/game.nsp", "a game");
+    Put(install, "notes.txt", "mine");
+    std::error_code ec;
+
+    Put(install, ".update-staging/lichii.exe", "v2");
+    REQUIRE(UpdateInstaller::Install(install / ".update-staging", install, ec));
+    CHECK(Read(install / ".update-backup/install-manifest.txt") == "#eden-manifest 2\n" "lichii.exe\n");
+
+    REQUIRE(UpdateInstaller::Install(install / ".update-backup", install, ec));
+    CHECK(Read(install / "lichii.exe") == "v1");
+    Put(install, ".update-staging/lichii.exe", "v3");
+    REQUIRE(UpdateInstaller::Install(install / ".update-staging", install, ec));
+    Put(install, ".update-staging/lichii.exe", "v4");
+    REQUIRE(UpdateInstaller::Install(install / ".update-staging", install, ec));
+
+    CHECK(Read(install / "lichii.exe") == "v4");
+    CHECK(Read(install / "Emulator/Games/game.nsp") == "a game");
+    CHECK(Read(install / "notes.txt") == "mine");
+}
+
+TEST_CASE("An old backup manifest that lists the whole folder is not trusted", "[updater]") {
+    TempDir dir;
+    const auto install = dir.path / "app";
+    Put(install, "lichii.exe", "v2");
+    Put(install, "install-manifest.txt", "lichii.exe\n");
+    Put(install, "Emulator/Games/game.nsp", "a game");
+    Put(install, ".update-backup/lichii.exe", "v1");
+    Put(install, ".update-backup/install-manifest.txt", "lichii.exe\nEmulator/Games/game.nsp\n");
+    std::error_code ec;
+
+    REQUIRE(UpdateInstaller::Install(install / ".update-backup", install, ec));
+    CHECK(Read(install / "lichii.exe") == "v1");
+    CHECK(Read(install / "install-manifest.txt") == "#eden-manifest 2\n");
+    Put(install, ".update-staging/lichii.exe", "v3");
+    REQUIRE(UpdateInstaller::Install(install / ".update-staging", install, ec));
+    CHECK(Read(install / "lichii.exe") == "v3");
+    CHECK(Read(install / "Emulator/Games/game.nsp") == "a game");
+}
+
+TEST_CASE("An old installed manifest that lists the whole folder removes nothing", "[updater]") {
+    TempDir dir;
+    const auto install = dir.path / "app";
+    Put(install, "lichii.exe", "v1");
+    Put(install, "install-manifest.txt", "lichii.exe\nEmulator/Games/game.nsp\n");
+    Put(install, "Emulator/Games/game.nsp", "a game");
+    std::error_code ec;
+
+    Put(install, ".update-staging/lichii.exe", "v2");
+    REQUIRE(UpdateInstaller::Install(install / ".update-staging", install, ec));
+    CHECK(Read(install / "Emulator/Games/game.nsp") == "a game");
+    REQUIRE(UpdateInstaller::Install(install / ".update-backup", install, ec));
+    CHECK(Read(install / "lichii.exe") == "v1");
+    CHECK(Read(install / "Emulator/Games/game.nsp") == "a game");
+    Put(install, ".update-staging/lichii.exe", "v3");
+    REQUIRE(UpdateInstaller::Install(install / ".update-staging", install, ec));
+    CHECK(Read(install / "Emulator/Games/game.nsp") == "a game");
+}
+
+TEST_CASE("Files an old update moved into the backup are put back", "[updater]") {
+    TempDir dir;
+    const auto install = dir.path / "app";
+    Put(install, "lichii.exe", "v2");
+    Put(install, "install-manifest.txt", "lichii.exe\n");
+    Put(install, ".update-backup/lichii.exe", "v1");
+    Put(install, ".update-backup/Emulator/Games/game.nsp", "a game");
+    Put(install, ".update-backup/install-manifest.txt", "lichii.exe\nEmulator/Games/game.nsp\n");
+    std::error_code ec;
+
+    Put(install, ".update-staging/lichii.exe", "v3");
+    REQUIRE(UpdateInstaller::Install(install / ".update-staging", install, ec));
+    CHECK(Read(install / "lichii.exe") == "v3");
+    CHECK(Read(install / "Emulator/Games/game.nsp") == "a game");
+    CHECK(Read(install / ".update-backup/lichii.exe") == "v2");
 }
 
 #ifndef _WIN32
@@ -307,7 +386,7 @@ TEST_CASE("The user folder is protected whatever its letter case", "[updater]") 
     REQUIRE(UpdateInstaller::Install(staging, install, ec));
     CHECK(Read(install / "USER/data.bin") == "mine");
     CHECK_FALSE(fs::exists(install / "User/config.ini"));
-    CHECK(Read(install / "install-manifest.txt") == "lichii.exe\n");
+    CHECK(Read(install / "install-manifest.txt") == "#eden-manifest 2\n" "lichii.exe\n");
     CHECK(Files(install / ".update-backup") ==
           std::set<std::string>{"lichii.exe", "install-manifest.txt"});
 }
