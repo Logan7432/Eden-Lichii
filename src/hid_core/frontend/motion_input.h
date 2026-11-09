@@ -30,8 +30,8 @@ public:
     static constexpr float IsAtRestStandard = 0.01f;
     static constexpr float IsAtRestTight = 0.005f;
 
-    static constexpr float GyroMaxValue = 5.0f;
-    static constexpr float AccelMaxValue = 7.0f;
+    static constexpr float GyroMaxValue = 6.0f;
+    static constexpr float AccelMaxValue = 8.5f;
 
     static constexpr u64 CalibrationTime = 2000000;
     static constexpr u64 CalibrationTimeout = 20000000;
