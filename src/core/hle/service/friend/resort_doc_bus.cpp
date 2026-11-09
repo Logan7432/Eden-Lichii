@@ -190,6 +190,7 @@ void DocBus::ResetLocked() {
     peers.clear();
     room_ips.clear();
     room_known = false;
+    online_ip = 0;
     lobby = 0;
     session = 0;
     clock = 0;
@@ -1052,6 +1053,9 @@ void DocBus::OnConnection(bool connected) {
         return;
     }
     if (!connected) {
+        if (lobby != 0 && static_cast<u32>(lobby) != online_ip) {
+            LeaveLobbyLocked();
+        }
         u32 removed = 0;
         for (auto& [doc_key, entry] : entries) {
             if (IsOwn(entry.owner) || entry.erased) {
@@ -1090,6 +1094,7 @@ void DocBus::OnConnection(bool connected) {
             }
         }
     }
+    online_ip = link.OwnIp();
     LOG_INFO(Service_Friend, "ResortBus online as {} node={:016x} lobby={:016x} session={:016x}",
              IpText(link.OwnIp()), node, lobby, session);
     SendHello(static_cast<u8>(HelloFlag::WantRoomDocs |

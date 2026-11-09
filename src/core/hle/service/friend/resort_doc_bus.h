@@ -258,6 +258,7 @@ private:
     u32 tx_seq{};
     u64 lobby{};
     bool room_known{};
+    u32 online_ip{};
     std::map<DocKey, Entry> entries;
     std::map<u64, DocKey> by_seq;
     std::unordered_map<u64, Peer> peers;

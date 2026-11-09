@@ -605,6 +605,7 @@ void Drain(State& state, DocBus& bus) {
         if (state.lobby != 0 && identity.lobby == 0) {
             state.want_lobby = false;
         }
+        state.joined_huddle.clear();
         state.lobby = identity.lobby;
         MarkAll(state);
     }
