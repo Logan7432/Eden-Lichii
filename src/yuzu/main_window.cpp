@@ -14,7 +14,6 @@
 #include <boost/algorithm/string/split.hpp>
 #include "common/controller_console_state.h"
 #include "common/fs/path_util.h"
-#include "common/game_presets.h"
 #include "common/settings.h"
 #include "common/settings_enums.h"
 #include "frontend_common/settings_generator.h"
@@ -61,6 +60,7 @@
 #include <initializer_list>
 #include "yuzu/nup_dialogs.h"
 #include "yuzu/overlay_panel.h"
+#include "yuzu/recommended_settings_dialog.h"
 #include "yuzu/shader_warm_dialog.h"
 #include "video_core/shader_warm/shader_warm_builder.h"
 #ifdef LICHII_NX_TOOLS
@@ -815,24 +815,6 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     filter.ParseFilterString(Settings::values.log_filter.GetValue());
     Common::Log::SetGlobalFilter(filter);
 
-    if (user_data_migrator.migrated) {
-        // Sort-of hack whereby we only move the old dir if it's a subfolder of the user dir
-
-        using namespace Common::FS;
-
-        static constexpr const std::array<const EdenPath, 4> paths = {
-            EdenPath::NANDDir, EdenPath::SDMCDir, EdenPath::DumpDir, EdenPath::LoadDir};
-
-        for (const EdenPath& path : paths) {
-            std::string str_path = Common::FS::GetEdenPathString(path);
-            if (str_path.starts_with(user_data_migrator.selected_emu.get_user_dir())) {
-                boost::replace_all(
-                    str_path, user_data_migrator.selected_emu.lower_name().toStdString(), "eden");
-                Common::FS::SetEdenPath(path, str_path);
-            }
-        }
-    }
-
 #ifdef __unix__
     SetupSigInterrupts();
 #endif
@@ -1423,13 +1405,17 @@ void MainWindow::InitializeWidgets() {
     game_fps_label = new QLabel();
     game_fps_label->setToolTip(tr("How many frames per second the game is currently displaying. "
                                   "This will vary from game to game and scene to scene."));
+    dlss_status_label = new QLabel();
+    dlss_status_label->setToolTip(
+        tr("NVIDIA DLSS is upscaling the game, in the mode shown. The window adapting filter "
+           "runs after it."));
     emu_frametime_label = new QLabel();
     emu_frametime_label->setToolTip(
         tr("Time taken to emulate a Switch frame, not counting framelimiting or v-sync. For "
            "full-speed emulation this should be at most 16.67 ms."));
 
     for (auto& label : {shader_building_label, res_scale_label, emu_speed_label, game_fps_label,
-                        emu_frametime_label}) {
+                        dlss_status_label, emu_frametime_label}) {
         label->setVisible(false);
         label->setFrameStyle(QFrame::NoFrame);
         label->setContentsMargins(4, 0, 4, 0);
@@ -1525,7 +1511,8 @@ void MainWindow::InitializeWidgets() {
             [this](const QPoint& menu_location) {
                 QMenu context_menu;
                 for (auto const& [type, text] : ConfigurationShared::frame_gen_type_texts_map) {
-                    context_menu.addAction(text, [this, type] {
+                    const QString label = ConfigurationShared::TranslateMapText(translator, text);
+                    context_menu.addAction(label, [this, type] {
                         Settings::values.frame_gen_type.SetValue(type);
                         Settings::values.frame_gen.SetValue(true);
                         UpdateFrameGenButton();
@@ -1625,7 +1612,9 @@ void MainWindow::InitializeWidgets() {
             [this](const QPoint& menu_location) {
                 QMenu context_menu;
                 for (auto const& aa_text_pair : ConfigurationShared::anti_aliasing_texts_map) {
-                    context_menu.addAction(aa_text_pair.second, [this, aa_text_pair] {
+                    const QString label =
+                        ConfigurationShared::TranslateMapText(translator, aa_text_pair.second);
+                    context_menu.addAction(label, [this, aa_text_pair] {
                         Settings::values.anti_aliasing.SetValue(aa_text_pair.first);
                         UpdateAAText();
                     });
@@ -1648,7 +1637,9 @@ void MainWindow::InitializeWidgets() {
             [this](const QPoint& menu_location) {
                 QMenu context_menu;
                 for (auto const& filter_text_pair : ConfigurationShared::scaling_filter_texts_map) {
-                    context_menu.addAction(filter_text_pair.second, [this, filter_text_pair] {
+                    const QString label =
+                        ConfigurationShared::TranslateMapText(translator, filter_text_pair.second);
+                    context_menu.addAction(label, [this, filter_text_pair] {
                         Settings::values.scaling_filter.SetValue(filter_text_pair.first);
                         UpdateFilterText();
                     });
@@ -1671,7 +1662,9 @@ void MainWindow::InitializeWidgets() {
                 QMenu context_menu;
 
                 for (auto const& pair : ConfigurationShared::use_docked_mode_texts_map) {
-                    context_menu.addAction(pair.second, [this, &pair] {
+                    const QString label =
+                        ConfigurationShared::TranslateMapText(translator, pair.second);
+                    context_menu.addAction(label, [this, &pair] {
                         if (pair.first != Settings::values.use_docked_mode.GetValue()) {
                             OnToggleDockedMode();
                         }
@@ -1695,7 +1688,9 @@ void MainWindow::InitializeWidgets() {
                 QMenu context_menu;
 
                 for (auto const& gpu_accuracy_pair : ConfigurationShared::gpu_accuracy_texts_map) {
-                    context_menu.addAction(gpu_accuracy_pair.second, [this, gpu_accuracy_pair] {
+                    const QString label =
+                        ConfigurationShared::TranslateMapText(translator, gpu_accuracy_pair.second);
+                    context_menu.addAction(label, [this, gpu_accuracy_pair] {
                         Settings::values.gpu_accuracy.SetValue(gpu_accuracy_pair.first);
                         UpdateGPUAccuracyButton();
                     });
@@ -1725,11 +1720,12 @@ void MainWindow::InitializeWidgets() {
                     if (renderer_backend_pair.first == Settings::RendererBackend::Null) {
                         continue;
                     }
-                    context_menu.addAction(
-                        renderer_backend_pair.second, [this, renderer_backend_pair] {
-                            Settings::values.renderer_backend.SetValue(renderer_backend_pair.first);
-                            UpdateAPIText();
-                        });
+                    const QString label = ConfigurationShared::TranslateMapText(
+                        translator, renderer_backend_pair.second);
+                    context_menu.addAction(label, [this, renderer_backend_pair] {
+                        Settings::values.renderer_backend.SetValue(renderer_backend_pair.first);
+                        UpdateAPIText();
+                    });
                 }
                 context_menu.exec(renderer_status_button->mapToGlobal(menu_location));
                 renderer_status_button->repaint();
@@ -7506,6 +7502,14 @@ void MainWindow::ConnectMenuEvents() {
     connect_menu(ui->action_Install_Keys, &MainWindow::OnInstallDecryptionKeys);
     connect_menu(ui->action_About, &MainWindow::OnAbout);
     connect_menu(ui->action_Eden_Dependencies, &MainWindow::OnEdenDependencies);
+    connect_menu(ui->action_Apply_Recommended_Settings, &MainWindow::OnApplyRecommendedSettings);
+    connect_menu(ui->action_Restore_Previous_Settings, &MainWindow::OnRestorePreviousSettings);
+    connect(ui->menu_Help, &QMenu::aboutToShow, this, [this] {
+        ui->action_Apply_Recommended_Settings->setEnabled(!emulation_running);
+        ui->action_Restore_Previous_Settings->setEnabled(!emulation_running);
+        ui->action_Restore_Previous_Settings->setVisible(
+            !Settings::values.recommended_settings_backup.GetValue().empty());
+    });
     connect_menu(ui->action_Data_Manager, &MainWindow::OnDataDialog);
 
 #if defined(ENABLE_UPDATE_CHECKER) && (defined(__linux__) || defined(_WIN32))
@@ -7911,26 +7915,6 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
         QtCommon::system->ApplySettings();
     }
 
-    if (title_id == Settings::MarioKartWorldProgramId && !asked_recommended_mkw_settings) {
-        asked_recommended_mkw_settings = true;
-        use_recommended_mkw_settings =
-            QMessageBox::question(
-                this, tr("Recommended Mario Kart World settings"),
-                tr("Use the recommended settings for Mario Kart World?\n\n"
-                   "Vulkan, 1x resolution, GPU Fast, asynchronous shaders, BC3, conservative VRAM, "
-                   "reactive flushing off, FIFO Relaxed VSync, handheld mode, ScaleForce, and "
-                   "FXAA.\n\n"
-                   "They apply to Mario Kart World until Eden is closed. Your saved settings "
-                   "are not changed."),
-                QMessageBox::Yes | QMessageBox::No, QMessageBox::No) == QMessageBox::Yes;
-        LOG_INFO(Config, "MKW recommended settings accepted: {}", use_recommended_mkw_settings);
-    }
-    if (Settings::ApplyMarioKartWorldPreset(Settings::values, title_id,
-                                          use_recommended_mkw_settings)) {
-        QtCommon::system->ApplySettings();
-        Settings::UpdateGPUAccuracy();
-        LOG_INFO(Config, "Applied recommended MKW settings after per-game configuration");
-    }
     PrepareShaderPrecache(title_id, std::filesystem::path{filename.toStdU16String()});
     Settings::LogSettings();
 
@@ -8125,6 +8109,8 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
     frame_gen_state = VideoCore::FrameGenState::Pending;
     frame_gen_frames = 0;
     frame_gen_generating = false;
+    frame_gen_fps = 0.0;
+    frame_gen_fps_timer.invalidate();
     refresh_button->setDisabled(true);
     SetFPSSuffix();
 
@@ -8342,6 +8328,7 @@ void MainWindow::OnEmulationStopped() {
     res_scale_label->setVisible(false);
     emu_speed_label->setVisible(false);
     game_fps_label->setVisible(false);
+    dlss_status_label->setVisible(false);
     emu_frametime_label->setVisible(false);
     renderer_status_button->setEnabled(!UISettings::values.has_broken_vulkan);
     frame_gen_status_button->setEnabled(true);
@@ -10589,6 +10576,35 @@ void MainWindow::OnEdenDependencies() {
     depsDialog.exec();
 }
 
+void MainWindow::OnApplyRecommendedSettings() {
+    if (emulation_running) {
+        return;
+    }
+    // A game can start behind the question; leave its settings alone then.
+    if (!RecommendedSettingsDialog::Ask(this) || emulation_running) {
+        return;
+    }
+    const auto changes = Settings::ApplyRecommendedSettings(Settings::values);
+    LOG_INFO(Config, "Applied the recommended settings: {} changed", changes.size());
+    Settings::UpdateGPUAccuracy();
+    OnSaveConfig();
+    UpdateStatusButtons();
+    RecommendedSettingsDialog::ShowApplied(this, changes);
+}
+
+void MainWindow::OnRestorePreviousSettings() {
+    if (emulation_running) {
+        return;
+    }
+    const auto changes = Settings::RestorePreviousSettings(Settings::values);
+    LOG_INFO(Config, "Restored the settings from before the recommended ones: {} changed",
+             changes.size());
+    Settings::UpdateGPUAccuracy();
+    OnSaveConfig();
+    UpdateStatusButtons();
+    RecommendedSettingsDialog::ShowRestored(this, changes);
+}
+
 void MainWindow::OnDataDialog() {
     DataDialog dataDialog(this);
     dataDialog.exec();
@@ -10657,7 +10673,8 @@ void MainWindow::OnGameListConvertToNup(const std::string& game_path) {
     if (nup_running)
         return;
 
-    const auto root = FileSys::Nup::DumpRootFromMain(game_path);
+    const auto root =
+        FileSys::Nup::DumpRootFromMain(std::filesystem::path{Common::FS::ToU8String(game_path)});
     if (!root)
         return;
     const QString convert_title = tr("Convert to NUP");
@@ -11401,6 +11418,45 @@ void MainWindow::UpdateStatusBar() {
     auto& shader_notify = QtCommon::system->GPU().ShaderNotify();
     const int shaders_building = shader_notify.ShadersBuilding();
 
+    // Before statsUpdated, so the performance overlay reads this update's generated frame rate.
+    const auto frame_gen = QtCommon::system->GPU().Renderer().GetFrameGenStatus();
+    const u64 new_generated_frames = frame_gen.generated_frames - frame_gen_frames;
+    const qint64 frame_gen_ms = frame_gen_fps_timer.isValid() ? frame_gen_fps_timer.restart() : 0;
+    if (!frame_gen_fps_timer.isValid()) {
+        frame_gen_fps_timer.start();
+    }
+    frame_gen_fps = frame_gen_ms > 0 ? static_cast<double>(new_generated_frames) * 1000.0 /
+                                           static_cast<double>(frame_gen_ms)
+                                     : 0.0;
+    frame_gen_generating = frame_gen.generated_frames > frame_gen_frames;
+    frame_gen_frames = frame_gen.generated_frames;
+    frame_gen_state = frame_gen.state;
+
+    const auto dlss = QtCommon::system->GPU().Renderer().GetDlssStatus();
+    dlss_status_text.clear();
+    if (dlss.evaluations > dlss_evaluations) {
+        const auto mode_text = [this](Settings::NvidiaDlssQuality mode) {
+            return ConfigurationShared::TranslateMapText(
+                       translator, ConfigurationShared::nvidia_dlss_quality_texts_map.at(mode))
+                .toUpper();
+        };
+        dlss_status_text =
+            tr("DLSS %1 %2", "NVIDIA DLSS mode and model preset, e.g. DLSS DLAA M")
+                .arg(mode_text(dlss.mode),
+                     ConfigurationShared::TranslateMapText(
+                         translator,
+                         ConfigurationShared::nvidia_dlss_preset_texts_map.at(dlss.preset))
+                         .toUpper());
+        if (dlss.requested != Settings::NvidiaDlssQuality::Automatic &&
+            dlss.requested != dlss.mode) {
+            dlss_status_text += tr(" (%1 DOESN'T FIT)", "The DLSS mode the user chose")
+                                    .arg(mode_text(dlss.requested));
+        }
+    }
+    dlss_evaluations = dlss.evaluations;
+    dlss_status_label->setText(dlss_status_text);
+    dlss_status_label->setVisible(!dlss_status_text.isEmpty());
+
     emit statsUpdated(results, shader_notify);
 
     if (shaders_building > 0) {
@@ -11436,10 +11492,6 @@ void MainWindow::UpdateStatusBar() {
 
     emu_frametime_label->setText(tr("Frame: %1 ms").arg(results.frametime * 1000.0, 0, 'f', 2));
 
-    const auto frame_gen = QtCommon::system->GPU().Renderer().GetFrameGenStatus();
-    frame_gen_generating = frame_gen.generated_frames > frame_gen_frames;
-    frame_gen_frames = frame_gen.generated_frames;
-    frame_gen_state = frame_gen.state;
     UpdateFrameGenButton();
 
     res_scale_label->setVisible(true);
@@ -11452,8 +11504,8 @@ void MainWindow::UpdateStatusBar() {
 
 void MainWindow::UpdateGPUAccuracyButton() {
     const auto gpu_accuracy = Settings::values.gpu_accuracy.GetValue();
-    const auto gpu_accuracy_text =
-        ConfigurationShared::gpu_accuracy_texts_map.find(gpu_accuracy)->second;
+    const auto gpu_accuracy_text = ConfigurationShared::TranslateMapText(
+        translator, ConfigurationShared::gpu_accuracy_texts_map.find(gpu_accuracy)->second);
     gpu_accuracy_button->setText(gpu_accuracy_text);
     gpu_accuracy_button->setToolTip(tr("GPU accuracy - click to toggle, right click for all modes"));
     gpu_accuracy_button->setChecked(gpu_accuracy != Settings::GpuAccuracy::Low);
@@ -11462,15 +11514,16 @@ void MainWindow::UpdateGPUAccuracyButton() {
 void MainWindow::UpdateDockedButton() {
     const auto console_mode = Settings::values.use_docked_mode.GetValue();
     dock_status_button->setChecked(Settings::IsDockedMode());
-    dock_status_button->setText(
-        ConfigurationShared::use_docked_mode_texts_map.find(console_mode)->second);
+    const QString docked_text = ConfigurationShared::TranslateMapText(
+        translator, ConfigurationShared::use_docked_mode_texts_map.find(console_mode)->second);
+    dock_status_button->setText(docked_text);
     dock_status_button->setToolTip(tr("Console mode - click to toggle"));
 }
 
 void MainWindow::UpdateAPIText() {
     const auto api = Settings::values.renderer_backend.GetValue();
-    const auto renderer_status_text =
-        ConfigurationShared::renderer_backend_texts_map.find(api)->second;
+    const auto renderer_status_text = ConfigurationShared::TranslateMapText(
+        translator, ConfigurationShared::renderer_backend_texts_map.find(api)->second);
     renderer_status_button->setText(renderer_status_text);
     renderer_status_button->setChecked(api == Settings::RendererBackend::Vulkan);
     renderer_status_button->setToolTip(tr("Graphics API - click to toggle"));
@@ -11478,14 +11531,16 @@ void MainWindow::UpdateAPIText() {
 
 void MainWindow::UpdateFilterText() {
     const auto filter = Settings::values.scaling_filter.GetValue();
-    const auto filter_text = ConfigurationShared::scaling_filter_texts_map.find(filter)->second;
+    const auto filter_text = ConfigurationShared::TranslateMapText(
+        translator, ConfigurationShared::scaling_filter_texts_map.find(filter)->second);
     filter_status_button->setText(filter_text);
     filter_status_button->setToolTip(tr("Window adapting filter - click to cycle, right click for all"));
 }
 
 void MainWindow::UpdateAAText() {
     const auto aa_mode = Settings::values.anti_aliasing.GetValue();
-    const auto aa_text = ConfigurationShared::anti_aliasing_texts_map.find(aa_mode)->second;
+    const auto aa_text = ConfigurationShared::TranslateMapText(
+        translator, ConfigurationShared::anti_aliasing_texts_map.find(aa_mode)->second);
     aa_status_button->setText(aa_mode == Settings::AntiAliasing::None ? tr("No AA") : aa_text);
     aa_status_button->setToolTip(tr("Anti-aliasing - click to cycle, right click for all"));
 }
@@ -11519,9 +11574,10 @@ void MainWindow::UpdateFrameGenButton() {
         return;
     }
 
-    const QString type = ConfigurationShared::frame_gen_type_texts_map
-                             .find(Settings::values.frame_gen_type.GetValue())
-                             ->second.toUpper();
+    const QString& type_text = ConfigurationShared::frame_gen_type_texts_map
+                                   .find(Settings::values.frame_gen_type.GetValue())
+                                   ->second;
+    const QString type = ConfigurationShared::TranslateMapText(translator, type_text).toUpper();
     const u32 target_rate = Settings::values.frame_gen_target_rate.GetValue();
     const QString mode = target_rate == 0
                              ? tr("FG %1 %2X").arg(type).arg(Settings::FrameGenMultiplier())
@@ -12023,35 +12079,49 @@ void MainWindow::UpdateUITheme() {
 void MainWindow::LoadTranslation() {
     bool loaded;
 
-    if (UISettings::values.language.GetValue().empty()) {
+    const std::string language = UISettings::values.language.GetValue();
+    if (language.empty()) {
         // If the selected language is empty, use system locale
         loaded = translator.load(QLocale(), {}, {}, QStringLiteral(":/languages/"));
     } else {
         // Otherwise load from the specified file
-        loaded = translator.load(QString::fromStdString(UISettings::values.language.GetValue()),
-                                 QStringLiteral(":/languages/"));
+        loaded = translator.load(QString::fromStdString(language), QStringLiteral(":/languages/"));
     }
 
-    if (loaded)
+    if (loaded) {
         qApp->installTranslator(&translator);
-    else
-        UISettings::values.language = std::string("en");
+    } else if (!language.empty() && language != "en") {
+        // A language this build has no translation for shows English, but the setting is kept
+        // (the language list marks it as missing), so a build that has the translation shows it
+        // again. Likewise <System> stays when the system's language has no translation. English
+        // works without its file (en.qm only holds plurals, and builds without translations lack
+        // it), so it gets no warning.
+        LOG_WARNING(Frontend, "No UI translation for \"{}\" in this build, showing English",
+                    language);
+    }
 }
 
 void MainWindow::OnLanguageChanged(const QString& locale) {
     if (UISettings::values.language.GetValue() != std::string("en"))
         qApp->removeTranslator(&translator);
 
+    UISettings::values.language = locale.toStdString();
+    LoadTranslation();
+
+    // After the new translator is in: renamed before it, the sizes stayed in English.
     QList<QAction*> actions = game_size_actions->actions();
     for (size_t i = 0; i < default_game_icon_sizes.size(); i++) {
         actions.at(i)->setText(GetTranslatedGameIconSize(i));
     }
 
-    UISettings::values.language = locale.toStdString();
-    LoadTranslation();
     ui->retranslateUi(this);
     multiplayer_state->retranslateUi();
     UpdateWindowTitle();
+    // The status bar's buttons are named in code, so retranslateUi leaves them as they were.
+    UpdateStatusButtons();
+#ifdef HAS_RESHADE
+    UpdatePostShaderText();
+#endif
 }
 
 void MainWindow::SetDiscordEnabled([[maybe_unused]] bool state) {
