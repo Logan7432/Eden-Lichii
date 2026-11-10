@@ -171,7 +171,7 @@ public:
      * Sends a Proxy packet to the room.
      * @param packet The WiFi packet to send.
      */
-    void SendProxyPacket(const ProxyPacket& packet);
+    void SendProxyPacket(const ProxyPacket& packet, bool reliable = true);
 
     void DeliverLoopbackProxyPacket(const ProxyPacket& packet);
 

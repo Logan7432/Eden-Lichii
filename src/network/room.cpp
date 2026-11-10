@@ -278,8 +278,11 @@ void Room::RoomImpl::StartLoop() {
                 case ENET_EVENT_TYPE_DISCONNECT:
                     HandleClientDisconnection(event.peer);
                     break;
-                case ENET_EVENT_TYPE_NONE:
                 case ENET_EVENT_TYPE_CONNECT:
+                    enet_peer_throttle_configure(event.peer, ENET_PEER_PACKET_THROTTLE_INTERVAL,
+                                                 ENET_PEER_PACKET_THROTTLE_ACCELERATION, 0);
+                    break;
+                case ENET_EVENT_TYPE_NONE:
                     break;
                 }
             }
@@ -837,8 +840,11 @@ void Room::RoomImpl::HandleProxyPacket(const ENetEvent* event) {
 
     Packet out_packet;
     out_packet.Append(event->packet->data, event->packet->dataLength);
-    ENetPacket* enet_packet = enet_packet_create(out_packet.GetData(), out_packet.GetDataSize(),
-                                                 ENET_PACKET_FLAG_RELIABLE);
+    const enet_uint32 flags = (event->packet->flags & ENET_PACKET_FLAG_RELIABLE) != 0
+                                  ? ENET_PACKET_FLAG_RELIABLE
+                                  : ENET_PACKET_FLAG_UNSEQUENCED;
+    ENetPacket* enet_packet =
+        enet_packet_create(out_packet.GetData(), out_packet.GetDataSize(), flags);
 
     const auto& destination_address = remote_ip;
     if (broadcast) { // Send the data to everyone except the sender

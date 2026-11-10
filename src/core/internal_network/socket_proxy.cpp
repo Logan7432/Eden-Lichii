@@ -287,7 +287,8 @@ void ProxySocket::SendPacket(ProxyPacket& packet) {
                 room_member->DeliverLoopbackProxyPacket(packet);
                 return;
             }
-            room_member->SendProxyPacket(packet);
+            room_member->SendProxyPacket(
+                packet, packet.protocol != Protocol::UDP || !SwitchSportsLanFixesEnabled());
         }
     }
 }

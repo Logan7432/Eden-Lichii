@@ -109,6 +109,7 @@ struct State {
     std::chrono::steady_clock::time_point next_local_try{};
     u32 lan_gen{};
     LanTrack lan;
+    std::array<s32, 4> lobby_answers{{-100, -100, -100, -100}};
 };
 
 State& GetState() {
@@ -997,7 +998,24 @@ s32 GameQuery(std::span<const u8> in) {
         if (in.size() >= 12) {
             std::memcpy(&flags, in.data() + 8, 4);
         }
-        return LobbyQuery(state, (flags & 1) != 0, (flags & 2) != 0);
+        const bool has_session = (flags & 1) != 0;
+        const bool at_start = (flags & 2) != 0;
+        const s32 answer = LobbyQuery(state, has_session, at_start);
+        auto& last = state.lobby_answers[(has_session ? 1 : 0) | (at_start ? 2 : 0)];
+        if (last != answer) {
+            last = answer;
+            const u32 ip = Common::swap32(static_cast<u32>(answer));
+            LOG_INFO(Service_Friend, "ResortDocs LAN role for session={} start={}: {}",
+                     has_session, at_start,
+                     answer == LobbyNone   ? std::string{"none"}
+                     : answer == LobbyHost ? std::string{"host"}
+                     : answer == LobbyRejoin ? std::string{"rejoin"}
+                     : answer == LobbyWait   ? std::string{"wait"}
+                                             : fmt::format("join {}.{}.{}.{}", ip >> 24,
+                                                           (ip >> 16) & 0xFF, (ip >> 8) & 0xFF,
+                                                           ip & 0xFF));
+        }
+        return answer;
     }
     return EnsureActive(state) ? 1 : 0;
 }
@@ -1181,6 +1199,7 @@ void ResetGameAdapter() {
     state.local_tries = 0;
     state.next_local_try = {};
     state.lan = {};
+    state.lobby_answers = {{-100, -100, -100, -100}};
 }
 
 } // namespace Service::Friend::ResortBus

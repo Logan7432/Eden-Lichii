@@ -173,6 +173,35 @@ void Error::Execute() {
     const auto callback = [this] { DisplayCompleted(); };
     const auto title_id = system.GetApplicationProcessProgramID();
     const auto& reporter{system.GetReporter()};
+    const auto wide_code = [](u64 code) {
+        return fmt::format("{:04}-{:04}", code >> 32, code & 0xFFFFFFFF);
+    };
+    const auto narrow_code = [](u32 code) {
+        const Result result{code};
+        return fmt::format("{:04}-{:04}", 2000 + static_cast<u32>(result.GetModule()),
+                           result.GetDescription());
+    };
+    std::string shown_code;
+    switch (mode) {
+    case ErrorAppletMode::ShowError:
+        shown_code = args->error.use_64bit_error_code ? wide_code(args->error.error_code_64)
+                                                      : narrow_code(args->error.error_code_32);
+        break;
+    case ErrorAppletMode::ShowSystemError:
+        shown_code = wide_code(args->system_error.error_code_64);
+        break;
+    case ErrorAppletMode::ShowApplicationError:
+        shown_code = fmt::format("application code {:#x}", args->application_error.error_code);
+        break;
+    case ErrorAppletMode::ShowErrorPctl:
+    case ErrorAppletMode::ShowErrorRecord:
+        shown_code = wide_code(args->error_record.error_code_64);
+        break;
+    default:
+        shown_code = "unknown";
+        break;
+    }
+    LOG_INFO(Service_AM, "Error applet shows {} (mode {})", shown_code, static_cast<u32>(mode));
 
     switch (mode) {
     case ErrorAppletMode::ShowError:

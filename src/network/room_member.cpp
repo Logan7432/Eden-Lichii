@@ -3,12 +3,17 @@
 // SPDX-FileCopyrightText: Copyright 2017 Citra Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <list>
 #include <mutex>
 #include <set>
 #include <thread>
+#include <utility>
+#include <fmt/format.h>
 #include "common/assert.h"
+#include "common/logging.h"
 #include "common/polyfill_thread.h"
 #include "common/socket_types.h"
 #include "enet/enet.h"
@@ -18,6 +23,8 @@
 namespace Network {
 
 constexpr u32 ConnectionTimeoutMs = 5000;
+constexpr auto LinkSampleInterval = std::chrono::seconds{1};
+constexpr auto LinkLogInterval = std::chrono::seconds{30};
 
 class RoomMember::RoomMemberImpl {
 public:
@@ -58,11 +65,35 @@ public:
 
     IPv4Address fake_ip; ///< The fake ip of this member.
 
+    std::string room_address;
+    std::string last_room_address;
+    IPv4Address last_fake_ip{};
+    bool reclaiming_fake_ip{};
+    std::string join_password;
+    std::string join_token;
+
     std::mutex network_mutex; ///< Mutex that controls access to the `client` variable.
     /// Thread that receives and dispatches network packets
     std::optional<std::jthread> loop_thread;
     std::mutex send_list_mutex;  ///< Mutex that controls access to the `send_list` variable.
-    std::vector<Packet> send_list; ///< A list that stores all packets to send the async
+    std::vector<std::pair<Packet, bool>> send_list; ///< Packets to send and whether each is reliable
+
+    struct LinkSample {
+        u32 rtt{};
+        u32 rtt_variance{};
+        u32 packet_loss{};
+        u32 throttle{};
+        u32 in_flight{};
+        std::size_t queued{};
+    };
+    LinkSample link_last{};
+    u32 link_worst_rtt{};
+    std::size_t link_worst_queued{};
+    u64 link_sent{};
+    u64 link_sent_unreliable{};
+    u64 link_received{};
+    std::chrono::steady_clock::time_point link_last_receive{};
+    std::chrono::steady_clock::duration link_worst_receive_gap{};
 
     template <typename T>
     using CallbackSet = std::set<CallbackHandle<T>>;
@@ -91,7 +122,11 @@ public:
      * Sends data to the room. It will be send on channel 0 with flag RELIABLE
      * @param packet The data to send
      */
-    void Send(Packet&& packet);
+    void Send(Packet&& packet, bool reliable = true);
+
+    void LogLinkStats(const char* reason);
+
+    void SendCurrentGameInfo();
 
     /**
      * Sends a request to the server, asking for permission to join a room with the specified
@@ -163,11 +198,30 @@ public:
 // RoomMemberImpl
 void RoomMember::RoomMemberImpl::StartLoop() {
     loop_thread.emplace([&](std::stop_token stoken) {
+        auto next_sample = std::chrono::steady_clock::now();
+        auto next_log = next_sample + LinkLogInterval;
         // Receive packets while the connection is open
         while (IsConnected()) {
             std::lock_guard lock(network_mutex);
+            const auto now = std::chrono::steady_clock::now();
+            if (now >= next_sample && server) {
+                next_sample = now + LinkSampleInterval;
+                link_last = {server->roundTripTime,
+                             server->roundTripTimeVariance,
+                             server->packetLoss,
+                             server->packetThrottle,
+                             server->reliableDataInTransit,
+                             enet_list_size(&server->outgoingCommands) +
+                                 enet_list_size(&server->outgoingSendReliableCommands)};
+                link_worst_rtt = (std::max)(link_worst_rtt, link_last.rtt);
+                link_worst_queued = (std::max)(link_worst_queued, link_last.queued);
+                if (now >= next_log) {
+                    next_log = now + LinkLogInterval;
+                    LogLinkStats("stats");
+                }
+            }
             ENetEvent event;
-            if (enet_host_service(client, &event, 5) > 0) {
+            if (enet_host_service(client, &event, 1) > 0) {
                 switch (event.type) {
                 case ENET_EVENT_TYPE_RECEIVE:
                     switch (event.packet->data[0]) {
@@ -211,6 +265,15 @@ void RoomMember::RoomMemberImpl::StartLoop() {
                         SetError(Error::NameCollision);
                         break;
                     case IdIpCollision:
+                        if (reclaiming_fake_ip) {
+                            reclaiming_fake_ip = false;
+                            LOG_INFO(Network, "Room address {}.{}.{}.{} is taken, asking for any",
+                                     last_fake_ip[0], last_fake_ip[1], last_fake_ip[2],
+                                     last_fake_ip[3]);
+                            SendJoinRequest(nickname, NoPreferredIP, join_password, join_token);
+                            SendCurrentGameInfo();
+                            break;
+                        }
                         SetState(State::Idle);
                         SetError(Error::IpCollision);
                         break;
@@ -245,6 +308,7 @@ void RoomMember::RoomMemberImpl::StartLoop() {
                     break;
                 case ENET_EVENT_TYPE_DISCONNECT:
                     if (state == State::Joined || state == State::Moderator) {
+                        LogLinkStats("lost");
                         SetState(State::Idle);
                         SetError(Error::LostConnection);
                     }
@@ -258,15 +322,19 @@ void RoomMember::RoomMemberImpl::StartLoop() {
                     break;
                 }
             }
-            std::vector<Packet> packets;
+            std::vector<std::pair<Packet, bool>> packets;
             {
                 std::lock_guard send_lock(send_list_mutex);
                 packets.swap(send_list);
             }
-            for (auto const& packet : packets) {
-                ENetPacket* enetPacket = enet_packet_create(packet.GetData(), packet.GetDataSize(),
-                                                            ENET_PACKET_FLAG_RELIABLE);
+            for (auto const& [packet, reliable] : packets) {
+                ENetPacket* enetPacket =
+                    enet_packet_create(packet.GetData(), packet.GetDataSize(),
+                                       reliable ? ENET_PACKET_FLAG_RELIABLE
+                                                : ENET_PACKET_FLAG_UNSEQUENCED);
                 enet_peer_send(server, 0, enetPacket);
+                ++link_sent;
+                link_sent_unreliable += reliable ? 0 : 1;
             }
             enet_host_flush(client);
         }
@@ -274,9 +342,42 @@ void RoomMember::RoomMemberImpl::StartLoop() {
     });
 }
 
-void RoomMember::RoomMemberImpl::Send(Packet&& packet) {
+void RoomMember::RoomMemberImpl::Send(Packet&& packet, bool reliable) {
     std::lock_guard lock(send_list_mutex);
-    send_list.push_back(std::move(packet));
+    send_list.emplace_back(std::move(packet), reliable);
+}
+
+void RoomMember::RoomMemberImpl::LogLinkStats(const char* reason) {
+    LOG_INFO(Network,
+             "Room link {}: rtt {} ms (+-{}), worst {} ms; retransmits {:.1f}%; throttle {}/{}; "
+             "{} bytes in flight; {} commands queued, worst {}; sent {} packets, {} unreliable; "
+             "received {} game packets, longest gap {} ms",
+             reason, link_last.rtt, link_last.rtt_variance, link_worst_rtt,
+             link_last.packet_loss * 100.0 / static_cast<double>(ENET_PEER_PACKET_LOSS_SCALE),
+             link_last.throttle, static_cast<u32>(ENET_PEER_PACKET_THROTTLE_SCALE),
+             link_last.in_flight, link_last.queued, link_worst_queued, link_sent,
+             link_sent_unreliable, link_received,
+             std::chrono::duration_cast<std::chrono::milliseconds>(link_worst_receive_gap).count());
+    link_worst_rtt = 0;
+    link_worst_queued = 0;
+    link_sent = 0;
+    link_sent_unreliable = 0;
+    link_received = 0;
+    link_worst_receive_gap = {};
+}
+
+void RoomMember::RoomMemberImpl::SendCurrentGameInfo() {
+    GameInfo game_info;
+    {
+        std::lock_guard lock(game_info_mutex);
+        game_info = current_game_info;
+    }
+    Packet packet;
+    packet.Write(static_cast<u8>(IdSetGameInfo));
+    packet.Write(game_info.name);
+    packet.Write(game_info.id);
+    packet.Write(game_info.version);
+    Send(std::move(packet));
 }
 
 void RoomMember::RoomMemberImpl::SendJoinRequest(const std::string& nickname_,
@@ -351,12 +452,22 @@ void RoomMember::RoomMemberImpl::HandleJoinPacket(const ENetEvent* event) {
 
     // Parse the MAC Address from the packet
     packet.Read(fake_ip);
+    reclaiming_fake_ip = false;
+    last_room_address = room_address;
+    last_fake_ip = fake_ip;
 }
 
 void RoomMember::RoomMemberImpl::HandleProxyPackets(const ENetEvent* event) {
     ProxyPacket proxy_packet{};
     Packet packet;
     packet.Append(event->packet->data, event->packet->dataLength);
+
+    const auto now = std::chrono::steady_clock::now();
+    if (link_last_receive != std::chrono::steady_clock::time_point{}) {
+        link_worst_receive_gap = (std::max)(link_worst_receive_gap, now - link_last_receive);
+    }
+    link_last_receive = now;
+    ++link_received;
 
     // Ignore the first byte, which is the message id.
     packet.IgnoreBytes(sizeof(u8)); // Ignore the message type
@@ -620,9 +731,25 @@ void RoomMember::Join(const std::string& nick, const char* server_addr, u16 serv
     ENetEvent event{};
     int net = enet_host_service(room_member_impl->client, &event, ConnectionTimeoutMs);
     if (net > 0 && event.type == ENET_EVENT_TYPE_CONNECT) {
+        enet_peer_throttle_configure(room_member_impl->server, ENET_PEER_PACKET_THROTTLE_INTERVAL,
+                                     ENET_PEER_PACKET_THROTTLE_ACCELERATION, 0);
         room_member_impl->nickname = nick;
+        room_member_impl->room_address = fmt::format("{}:{}", server_addr, server_port);
+        room_member_impl->join_password = password;
+        room_member_impl->join_token = token;
+        IPv4Address request_ip = preferred_fake_ip;
+        room_member_impl->reclaiming_fake_ip =
+            preferred_fake_ip == NoPreferredIP &&
+            room_member_impl->room_address == room_member_impl->last_room_address &&
+            room_member_impl->last_fake_ip != NoPreferredIP;
+        if (room_member_impl->reclaiming_fake_ip) {
+            request_ip = room_member_impl->last_fake_ip;
+            LOG_INFO(Network, "Rejoining {} with its last room address {}.{}.{}.{}",
+                     room_member_impl->room_address, request_ip[0], request_ip[1],
+                     request_ip[2], request_ip[3]);
+        }
         room_member_impl->StartLoop();
-        room_member_impl->SendJoinRequest(nick, preferred_fake_ip, password, token);
+        room_member_impl->SendJoinRequest(nick, request_ip, password, token);
         SendGameInfo(GetCurrentGameInfo());
     } else {
         enet_peer_disconnect(room_member_impl->server, 0);
@@ -635,7 +762,7 @@ bool RoomMember::IsConnected() const {
     return room_member_impl->IsConnected();
 }
 
-void RoomMember::SendProxyPacket(const ProxyPacket& proxy_packet) {
+void RoomMember::SendProxyPacket(const ProxyPacket& proxy_packet, bool reliable) {
     Packet packet;
     packet.Write(static_cast<u8>(IdProxyPacket));
 
@@ -651,7 +778,7 @@ void RoomMember::SendProxyPacket(const ProxyPacket& proxy_packet) {
     packet.Write(proxy_packet.broadcast);
     packet.Write(proxy_packet.data);
 
-    room_member_impl->Send(std::move(packet));
+    room_member_impl->Send(std::move(packet), reliable);
 }
 
 void RoomMember::DeliverLoopbackProxyPacket(const ProxyPacket& proxy_packet) {
@@ -688,12 +815,7 @@ void RoomMember::SendGameInfo(const GameInfo& game_info) {
     if (!IsConnected())
         return;
 
-    Packet packet;
-    packet.Write(static_cast<u8>(IdSetGameInfo));
-    packet.Write(game_info.name);
-    packet.Write(game_info.id);
-    packet.Write(game_info.version);
-    room_member_impl->Send(std::move(packet));
+    room_member_impl->SendCurrentGameInfo();
 }
 
 void RoomMember::SendModerationRequest(RoomMessageTypes type, const std::string& nickname) {
