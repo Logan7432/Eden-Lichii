@@ -302,8 +302,8 @@ void RendererVulkan::Composite(std::span<const Tegra::FramebufferConfig> framebu
     }
 #endif
 
-    if (const auto mark = scheduler.NextFrameMark(); mark != Scheduler::FrameMark::None) {
-        scheduler.MarkFrameEnd(++trace_frame, mark);
+    if (trace) {
+        scheduler.MarkFrameEnd(++trace_frame);
     }
     scheduler.Flush(*frame->render_ready);
 

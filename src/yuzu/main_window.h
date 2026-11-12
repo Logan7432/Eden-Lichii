@@ -414,7 +414,6 @@ private slots:
     void OnInstallFirmware();
     void OnInstallFirmwareFromZIP();
     void OnInstallDecryptionKeys();
-    void OnWhatsNew();
     void OnAbout();
     void OnEdenDependencies();
     void OnApplyRecommendedSettings();
@@ -487,7 +486,6 @@ private:
     void UpdateStatusBar();
     void UpdateGPUAccuracyButton();
     void UpdateStatusButtons();
-    void UpdateMenuIcons();
     void UpdateUISettings();
     void UpdateInputDrivers();
     void HideMouseCursor();

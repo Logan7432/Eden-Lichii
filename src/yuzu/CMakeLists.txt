@@ -237,7 +237,6 @@ add_executable(yuzu
     nup_dialogs.h nup_dialogs.cpp
     shader_warm_dialog.h shader_warm_dialog.cpp
     recommended_settings_dialog.h recommended_settings_dialog.cpp
-    whats_new_dialog.h whats_new_dialog.cpp
     migration_worker.h migration_worker.cpp
     libqt_common.h libqt_common.cpp
 
@@ -252,7 +251,7 @@ add_executable(yuzu
     configuration/system/profile_avatar_dialog.h configuration/system/profile_avatar_dialog.cpp
     configuration/addon/mod_select_dialog.h configuration/addon/mod_select_dialog.cpp configuration/addon/mod_select_dialog.ui
 
-    render/performance_overlay.h render/performance_overlay.cpp
+    render/performance_overlay.h render/performance_overlay.cpp render/performance_overlay.ui
     updater/update_dialog.h updater/update_dialog.cpp updater/update_dialog.ui
     game/common.h
     game/carousel.h game/carousel.cpp
@@ -426,7 +425,7 @@ endif()
 
 target_link_libraries(yuzu PRIVATE nlohmann_json::nlohmann_json)
 target_link_libraries(yuzu PRIVATE common core input_common frontend_common network video_core qt_common)
-target_link_libraries(yuzu PRIVATE Boost::headers Qt6::Widgets Qt6::Concurrent Qt6::Network)
+target_link_libraries(yuzu PRIVATE Boost::headers Qt6::Widgets Qt6::Charts Qt6::Concurrent Qt6::Network)
 # Unpacks NVIDIA's files from the Streamline release (nvidia_dlss_panel.cpp).
 target_link_libraries(yuzu PRIVATE ZLIB::ZLIB)
 if (WIN32)
