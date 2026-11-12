@@ -121,7 +121,7 @@ bool FrameGenPresenter::OnPresentThread() const {
 
 bool FrameGenPresenter::Present(Frame* frame) {
     const u32 generated =
-        manager.blit_supported ? generator->Prepare(frame->width, frame->height) : 0;
+        manager.transfer_mode == PresentManager::TransferMode::Blit ? generator->Prepare(frame->width, frame->height) : 0;
     if (generated > 0) {
         PresentWithFrameGeneration(frame, generated);
         return true;
@@ -284,7 +284,7 @@ void FrameGenPresenter::PresentImage(Frame* frame, const Source& source) {
     cmdbuf.PipelineBarrier(vk::PIPELINE_STAGE_GRAPHICS_COMPUTE_TRANSFER,
                            VK_PIPELINE_STAGE_TRANSFER_BIT, {}, {}, {}, pre_barriers);
 
-    if (manager.blit_supported) {
+    if (manager.transfer_mode == PresentManager::TransferMode::Blit) {
         cmdbuf.BlitImage(source.image, source_layout, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                          MakeBlit(static_cast<s32>(source.width), static_cast<s32>(source.height),
                                   static_cast<s32>(extent.width), static_cast<s32>(extent.height)),

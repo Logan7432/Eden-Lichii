@@ -1399,7 +1399,8 @@ std::pair<s32, Errno> BSD_USA::SocketImpl(Domain domain, Type type, Protocol pro
     auto room_member = Network::GetRoomMember().lock();
     const bool emulated_ping = type == Type::RAW && protocol == Protocol::ICMP &&
                                Network::SwitchSportsLanFixesEnabled();
-    if ((room_member && room_member->IsConnected()) || emulated_ping) {
+    if ((room_member && room_member->IsConnected() && !Network::IsDirectLanActive()) ||
+        emulated_ping) {
         socket = std::make_shared<Network::ProxySocket>();
     } else {
         socket = std::make_shared<Network::Socket>();

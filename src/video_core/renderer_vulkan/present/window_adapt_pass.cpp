@@ -48,16 +48,14 @@ WindowAdaptPass::~WindowAdaptPass() = default;
 void WindowAdaptPass::Draw(const Device& device, RasterizerVulkan& rasterizer, Scheduler& scheduler, size_t image_index,
                            std::list<Layer>& layers,
                            std::span<const Tegra::FramebufferConfig> configs,
-                           const Layout::FramebufferLayout& layout, Frame* dst,
-                           bool overlay_panels) {
+                           const Layout::FramebufferLayout& layout,
+                           VkFramebuffer framebuffer, VkExtent2D extent,
+                           const HdrPresent& output, bool overlay_panels) {
 
-    const VkFramebuffer host_framebuffer{*dst->framebuffer};
+    const VkFramebuffer host_framebuffer{framebuffer};
     const VkRenderPass renderpass{*render_pass};
     const VkPipelineLayout graphics_pipeline_layout{*pipeline_layout};
-    const VkExtent2D render_area{
-        .width = dst->width,
-        .height = dst->height,
-    };
+    const VkExtent2D render_area{extent};
 
     const size_t layer_count = configs.size();
     std::vector<PresentPushConstants> push_constants(layer_count);
@@ -80,7 +78,7 @@ void WindowAdaptPass::Draw(const Device& device, RasterizerVulkan& rasterizer, S
         }
 
         layer_it->ConfigureDraw(device, &push_constants[i], &descriptor_sets[i], rasterizer, *sampler,
-                                image_index, configs[i], layout);
+                                image_index, configs[i], layout, output);
         layer_it++;
     }
 
@@ -99,17 +97,17 @@ void WindowAdaptPass::Draw(const Device& device, RasterizerVulkan& rasterizer, S
             continue;
         }
         constexpr VkFormat overlay_format = VK_FORMAT_R8G8B8A8_UNORM;
-        const VkExtent2D extent{overlay_frame.width, overlay_frame.height};
-        if (!quad.ready || quad.extent.width != extent.width ||
-            quad.extent.height != extent.height) {
+        const VkExtent2D overlay_extent{overlay_frame.width, overlay_frame.height};
+        if (!quad.ready || quad.extent.width != overlay_extent.width ||
+            quad.extent.height != overlay_extent.height) {
             // (A frame still on the GPU may be drawing the old image: replaced once it's done)
             scheduler.Wait(quad.used_tick);
-            quad.image = CreateWrappedImage(memory_allocator, extent, overlay_format);
+            quad.image = CreateWrappedImage(memory_allocator, overlay_extent, overlay_format);
             quad.view = CreateWrappedImageView(device, quad.image, overlay_format);
             quad.pool = CreateWrappedDescriptorPool(device, 1, 1);
             const std::vector layouts(1u, *descriptor_set_layout);
             quad.sets = CreateWrappedDescriptorSets(quad.pool, layouts);
-            quad.extent = extent;
+            quad.extent = overlay_extent;
             quad.ready = true;
             quad.version = 0;
         }
@@ -141,14 +139,14 @@ void WindowAdaptPass::Draw(const Device& device, RasterizerVulkan& rasterizer, S
             const VkImage target = *quad.image;
             const VkBufferImageCopy region{
                 .bufferOffset = 0,
-                .bufferRowLength = extent.width,
-                .bufferImageHeight = extent.height,
+                .bufferRowLength = overlay_extent.width,
+                .bufferImageHeight = overlay_extent.height,
                 .imageSubresource{.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
                                   .mipLevel = 0,
                                   .baseArrayLayer = 0,
                                   .layerCount = 1},
                 .imageOffset{},
-                .imageExtent{.width = extent.width, .height = extent.height, .depth = 1},
+                .imageExtent{.width = overlay_extent.width, .height = overlay_extent.height, .depth = 1},
             };
             scheduler.RequestOutsideRenderPassOperationContext();
             scheduler.Record([source, target, region](vk::CommandBuffer cmdbuf) {
@@ -202,8 +200,8 @@ void WindowAdaptPass::Draw(const Device& device, RasterizerVulkan& rasterizer, S
         static u32 logged_quads = 0;
         if (logged_quads < 3) {
             ++logged_quads;
-            LOG_INFO(Render_Vulkan, "overlay: quad drawn {}x{} at {},{}", extent.width,
-                     extent.height, x, y);
+            LOG_INFO(Render_Vulkan, "overlay: quad drawn {}x{} at {},{}", overlay_extent.width,
+                     overlay_extent.height, x, y);
         }
     }
 

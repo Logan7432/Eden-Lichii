@@ -12,6 +12,7 @@
 
 #include "common/math_util.h"
 #include "common/overlay_panels.h"
+#include "video_core/renderer_vulkan/present/hdr_convert.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
 
 namespace Layout {
@@ -38,10 +39,10 @@ public:
                              vk::ShaderModule&& fragment_shader);
     ~WindowAdaptPass();
 
-    /// (With the overlay panels on top only where asked: the screen's, not a capture)
     void Draw(const Device& device, RasterizerVulkan& rasterizer, Scheduler& scheduler, size_t image_index,
               std::list<Layer>& layers, std::span<const Tegra::FramebufferConfig> configs,
-              const Layout::FramebufferLayout& layout, Frame* dst, bool overlay_panels = false);
+              const Layout::FramebufferLayout& layout, VkFramebuffer framebuffer,
+              VkExtent2D extent, const HdrPresent& output, bool overlay_panels = false);
 
     VkDescriptorSetLayout GetDescriptorSetLayout();
     VkRenderPass GetRenderPass();
