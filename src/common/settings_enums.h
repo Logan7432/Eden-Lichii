@@ -4,7 +4,6 @@
 // SPDX-FileCopyrightText: Copyright 2024 Torzu Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// SPDX-FileCopyrightText: Copyright 2023 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #pragma once
@@ -170,7 +169,7 @@ ENUM(GpuLogLevel, Off, Errors, Standard, Verbose, All)
 ENUM(GameListMode, TreeView, GridView, CarouselView);
 ENUM(SpeedMode, Standard, Turbo, Slow);
 ENUM(FrameGenerationMultiplier, X2, X3, X4, X5, X6, X7, X8);
-ENUM(FrameGenType, Lsfg, Fsr3);
+ENUM(FrameGenType, Lsfg, Fsr3, NvidiaDlssG);
 
 template <typename Type>
 inline std::string_view CanonicalizeEnum(Type id) {

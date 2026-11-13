@@ -1,0 +1,9 @@
+<!--
+SPDX-License-Identifier: GPL-2.0-or-later
+-->
+
+<RCC>
+    <qresource prefix="/img">
+        <file alias="eden.ico">../../dist/eden.ico</file>
+    </qresource>
+</RCC>

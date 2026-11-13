@@ -19,7 +19,7 @@ endif()
 option(DYNARMIC_ENABLE_NO_EXECUTE_SUPPORT "Enables support for systems that require W^X" ${REQUIRE_WX})
 option(DYNARMIC_TESTS_USE_UNICORN "Enable fuzzing tests against unicorn" OFF)
 option(DYNARMIC_HOST_FEATURE_OVERRIDE "Let DYNARMIC_HOST_FEATURES=<hex mask> hide x64 host features (test builds only)" OFF)
-CMAKE_DEPENDENT_OPTION(DYNARMIC_USE_LLVM "Support disassembly of jitted x86_64 code using LLVM" OFF "NOT YUZU_DISABLE_LLVM" OFF)
+CMAKE_DEPENDENT_OPTION(DYNARMIC_USE_LLVM "Support disassembly of jitted x86_64 code using LLVM" OFF "NOT LICHII_DISABLE_LLVM" OFF)
 
 # Set hard requirements for C++
 set(CMAKE_CXX_STANDARD 20)
