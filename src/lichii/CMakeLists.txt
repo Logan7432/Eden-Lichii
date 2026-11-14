@@ -521,6 +521,10 @@ if (NOT MSVC AND (APPLE OR NOT LICHII_STATIC_BUILD))
         $<$<COMPILE_LANGUAGE:C,CXX>:-Wno-missing-field-initializers>)
 endif()
 
+if (MSVC)
+    target_compile_options(lichii PRIVATE /bigobj)
+endif()
+
 # Remember that the linker is incredibly stupid.
 target_link_libraries(lichii PRIVATE OpenSSL::SSL OpenSSL::Crypto SDL3::SDL3)
 
