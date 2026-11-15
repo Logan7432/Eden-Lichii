@@ -284,15 +284,16 @@ public:
     /// flushes and reads guest memory. With `pending`, a copy the GPU has not finished sets
     /// `*pending` and pending_list_tick instead of waiting (the result is false then).
     bool ReadGpuWrittenCommands(GPUVAddr address, u32 count, bool* pending = nullptr);
-    /// List-fed grid macros (nx2_list_grid.h): the entry at `address` is the three GPU-written
-    /// parameters of a call the compute engine stores as markers. Returns whether it took them
-    /// without reading them (no wait for the back, the host GPU or a copy).
-    bool TakeListGrid(GPUVAddr address, u32 count);
-    /// The three words of the list kept as `keep_id`, after everything sent so far (a wait for
-    /// the back and the host GPU). False if they are no longer kept.
-    bool ReadListWords(GPUVAddr address, u64 keep_id, std::span<u32> words);
     /// Brings command list words the GPU wrote (still only in host buffers) to guest memory.
     bool FlushGpuWrittenCommands(GPUVAddr address, size_t size);
+    /// A safe read of a command list on the split's front: the GPU-written list tracking follows
+    /// the buffer cache, so what the texture and query caches hold of the list (images, reports)
+    /// is written out on the back after the work sent before it, as a safe read flushes it. The
+    /// caches are asked once the work before the last host-level wait has run (WaitForSync). Only
+    /// a list that is read from memory (`live`) or that an image wrote is flushed. After an image
+    /// write every cache is flushed, the buffer cache too, and it returns true: the list is read
+    /// from guest memory, not from its submit-time copy or a buffer cache list copy.
+    bool FlushCachedCommands(GPUVAddr address, size_t size, bool live);
 
 private:
 

@@ -65,6 +65,9 @@ struct Runtime {
     bool CanReportMemoryUsage() const {
         return false;
     }
+    u64 GetBufferAllocationTail() const {
+        return 0;
+    }
     u64 GetDeviceLocalMemory() const {
         return 0;
     }
@@ -277,7 +280,8 @@ struct BufferCacheTestAccess {
         cache.memory_tracker.ForEachUploadRange(address, size, [](auto, auto) {});
         return id;
     }
-    static Buffer& Get(Cache& cache, BufferId id) {
+    template <class C>
+    static Buffer& Get(C& cache, BufferId id) {
         return cache.slot_buffers[id];
     }
     /// Add without the upload: guest memory not yet read into the buffer.
@@ -373,6 +377,15 @@ struct BufferCacheTestAccess {
     }
     static size_t ReadDownloads(Cache& cache) {
         return cache.read_downloads.size();
+    }
+    static u32 MaxUnreadWrites() {
+        return Cache::MaxUnreadWrites;
+    }
+    static u32 MaxPendingEarlyDownloads() {
+        return Cache::MaxPendingEarlyDownloads;
+    }
+    static u64 EarlyBytesPerFrame() {
+        return Cache::EarlyBytesPerFrame;
     }
     /// Every read download compared with a synchronous flush (EDEN_NX2_READ_CHECK=1).
     static void CheckEveryRead(Cache& cache) {
@@ -1646,16 +1659,17 @@ TEST_CASE("Early downloads keep CPU writes, and stop for pages no longer read", 
     REQUIRE(f.bytes[0x10020] == 0xee);
     REQUIRE(f.bytes[0x1002f] == 0xee);
     REQUIRE(f.bytes[0x10030] == 3);
-    // Not read any more: a few more writes get early downloads, then none.
+    // Not read any more: MaxUnreadWrites more writes get early downloads, then none.
     const u32 queued = f.runtime.queued_host_reads;
-    for (u8 frame = 4; frame < 12; ++frame) {
-        WriteByDispatch(f, id, 0x20000, 0x100, frame);
+    const u32 writes = Access::MaxUnreadWrites() + 4;
+    for (u32 write = 0; write < writes; ++write) {
+        WriteByDispatch(f, id, 0x20000, 0x100, static_cast<u8>(4 + write));
         f.runtime.Complete(f.runtime.submitted_tick);
     }
-    REQUIRE(f.runtime.queued_host_reads - queued == 4);
+    REQUIRE(f.runtime.queued_host_reads - queued == Access::MaxUnreadWrites());
     const auto area = ReadWord(f, 0x20010);
     REQUIRE_FALSE(area.preemtive);
-    REQUIRE(f.bytes[0x10010] == 11);
+    REQUIRE(f.bytes[0x10010] == static_cast<u8>(4 + writes - 1));
     REQUIRE(Access::ReadDownloads(*f.cache) == 0);
     REQUIRE_FALSE(Access::Pending(*f.cache, 0x20000, 0x1000));
 }
@@ -1830,33 +1844,42 @@ TEST_CASE("Finished early downloads land a few draws later, or at the next dispa
     REQUIRE(ReadWord(f, 0x20010).preemtive);
 }
 
-TEST_CASE("Early downloads stop at 32 on their way", "[buffer_ports]") {
+TEST_CASE("Early downloads stop at MaxPendingEarlyDownloads on their way", "[buffer_ports]") {
     Fixture f;
     const Nx2TitleScope nx2_title;
     const auto id = Access::Add(*f.cache, 0x20000, 0x30000);
-    // 33 pages, each read after two writes.
+    // 9 pages, each read after two writes.
     for (u8 frame = 1; frame <= 2; ++frame) {
-        for (DAddr page = 0x20000; page < 0x41000; page += 0x1000) {
+        for (DAddr page = 0x20000; page < 0x29000; page += 0x1000) {
             WriteByDispatch(f, id, page, 0x100, frame);
             ReadWord(f, page);
         }
     }
-    // Their next writes before the host GPU ran any copy: the 33rd page's read flushes.
-    for (DAddr page = 0x20000; page < 0x41000; page += 0x1000) {
-        WriteByDispatch(f, id, page, 0x100, 3);
+    // Writes to the first 8 before the host GPU ran any copy, as many as may be on their way.
+    const u32 max_pending = Access::MaxPendingEarlyDownloads();
+    const u32 rounds = max_pending / 8;
+    REQUIRE(rounds * 8 == max_pending);
+    REQUIRE(rounds <= Access::MaxUnreadWrites());
+    REQUIRE(max_pending * u64{0x1000} < Access::EarlyBytesPerFrame());
+    for (u32 round = 0; round < rounds; ++round) {
+        for (DAddr page = 0x20000; page < 0x28000; page += 0x1000) {
+            WriteByDispatch(f, id, page, 0x100, static_cast<u8>(3 + round));
+        }
     }
-    REQUIRE(f.runtime.queued_host_reads == 32);
-    REQUIRE(Access::ReadDownloads(*f.cache) == 32);
-    const auto last = ReadWord(f, 0x40010);
+    // The 9th page's write gets none: its read flushes.
+    WriteByDispatch(f, id, 0x28000, 0x100, static_cast<u8>(3 + rounds));
+    REQUIRE(f.runtime.queued_host_reads == max_pending);
+    REQUIRE(Access::ReadDownloads(*f.cache) == max_pending);
+    const auto last = ReadWord(f, 0x28010);
     REQUIRE_FALSE(last.preemtive);
     REQUIRE_FALSE(last.in_flight);
-    REQUIRE(f.bytes[0x30010] == 3);
-    REQUIRE(f.bytes[0x10010] == 3);
+    REQUIRE(f.bytes[0x18010] == static_cast<u8>(3 + rounds));
+    REQUIRE(f.bytes[0x10010] == static_cast<u8>(3 + rounds - 1));
     REQUIRE(Access::ReadDownloads(*f.cache) == 0);
     REQUIRE_FALSE(Access::Pending(*f.cache, 0x20000, 0x21000));
 }
 
-TEST_CASE("Early downloads stop at 1 MiB a frame", "[buffer_ports]") {
+TEST_CASE("Early downloads stop at EarlyBytesPerFrame a frame", "[buffer_ports]") {
     Fixture f;
     const Nx2TitleScope nx2_title;
     const auto id = Access::Add(*f.cache, 0x20000, 0x10000);
@@ -1864,16 +1887,17 @@ TEST_CASE("Early downloads stop at 1 MiB a frame", "[buffer_ports]") {
         WriteByDispatch(f, id, 0x20000, 0x1000, frame);
         ReadWord(f, 0x20010);
     }
-    // A whole page each, read once the host GPU ran it: 256 make 1 MiB.
-    for (u32 write = 0; write < 256; ++write) {
+    // A whole page each, read once the host GPU ran it, up to the frame's bytes.
+    const u32 writes = static_cast<u32>(Access::EarlyBytesPerFrame() / 0x1000);
+    for (u32 write = 0; write < writes; ++write) {
         WriteByDispatch(f, id, 0x20000, 0x1000, static_cast<u8>(write));
         f.runtime.Complete(f.runtime.submitted_tick);
         REQUIRE(ReadWord(f, 0x20010).preemtive);
     }
-    REQUIRE(f.runtime.queued_host_reads == 256);
+    REQUIRE(f.runtime.queued_host_reads == writes);
     // The frame's later writes leave their reads to flush.
     WriteByDispatch(f, id, 0x20000, 0x1000, 0xab);
-    REQUIRE(f.runtime.queued_host_reads == 256);
+    REQUIRE(f.runtime.queued_host_reads == writes);
     const auto area = ReadWord(f, 0x20010);
     REQUIRE_FALSE(area.preemtive);
     REQUIRE_FALSE(area.in_flight);
@@ -2555,4 +2579,93 @@ TEST_CASE("Claimed CPU writes keep their bytes when an earlier one downloads the
     REQUIRE(f.bytes[0x10800] == 0xbb);
     REQUIRE(f.bytes[0x1080f] == 0xbb);
     REQUIRE(f.bytes[0x10810] == 0x12);
+}
+
+namespace {
+/// Command list page 0x18000 (GPU 0x108000) of KeepFixture's buffer, read from its copies as the
+/// split's front reads them (DmaPusher::ReadGpuWrittenCommands).
+struct ListPageFixture : KeepFixture {
+    static constexpr DAddr Page = 0x18000;
+    static constexpr GPUVAddr PageGpu = 0x108000;
+
+    ListPageFixture() : KeepFixture{nullptr} {
+        Draw(nullptr); // Binds the channel DMACopy and DMAClear use.
+        Tegra::Nx2MarkCommandListPage(Page);
+    }
+    /// Collects the page writes of a dispatch or DMA operation and has the host GPU make the
+    /// copies taken after it, as the rasterizer does.
+    template <typename Func>
+    void Work(Func&& func) {
+        cache->Nx2CollectListCopies(true);
+        func();
+        if (cache->Nx2CopyListPages(runtime.CurrentTick())) {
+            runtime.Complete(runtime.SubmitForHostRead());
+        }
+        cache->Nx2CollectListCopies(false);
+    }
+    /// A dispatch that writes `value` over [address, address + size).
+    void Dispatch(DAddr address, u32 size, u8 value) {
+        Work([&] {
+            auto& buffer = Access::Get(*cache, id);
+            runtime.pending.push_back([&buffer, address, size, value] {
+                std::fill_n(buffer.bytes.begin() + static_cast<std::ptrdiff_t>(address - 0x10000),
+                            size, value);
+            });
+            Access::GpuWrite(*cache, id, address, size);
+        });
+    }
+    /// Whether the front reads [address, address + 0x20) from a copy that holds `value`.
+    bool CopyHolds(DAddr address, u8 value) {
+        std::array<u8, 0x20> out{};
+        if (cache->Nx2ReadListCopy(address, out, true) != KeepCache::Nx2ListRead::Copied) {
+            return false;
+        }
+        return std::ranges::all_of(out, [value](u8 byte) { return byte == value; });
+    }
+
+    const Nx2TitleScope nx2_title;
+};
+} // namespace
+
+TEST_CASE("A command list page is copied again after a DMA copy of data no GPU work wrote",
+          "[buffer_ports]") {
+    ListPageFixture f;
+    f.Dispatch(ListPageFixture::Page, 0x20, 3);
+    REQUIRE(f.CopyHolds(ListPageFixture::Page, 3));
+
+    // The source holds only what the CPU wrote, so none of the copied bytes are GPU-modified.
+    std::memset(f.bytes + 0x4000, 7, 0x20);
+    f.cache->WriteMemory(0x14000, 0x20);
+    f.Work([&] { REQUIRE(f.cache->DMACopy(0x104000, ListPageFixture::PageGpu, 0x20)); });
+    REQUIRE(f.bytes[0x8000] == 7);
+    REQUIRE(f.CopyHolds(ListPageFixture::Page, 7));
+}
+
+TEST_CASE("A command list page is copied again after a DMA clear", "[buffer_ports]") {
+    ListPageFixture f;
+    f.Dispatch(ListPageFixture::Page, 0x20, 3);
+    REQUIRE(f.CopyHolds(ListPageFixture::Page, 3));
+
+    // MaxwellDMA writes guest memory once the cache cleared the buffer.
+    f.Work([&] { REQUIRE(f.cache->DMAClear(ListPageFixture::PageGpu, 8, 0x09090909)); });
+    std::memset(f.bytes + 0x8000, 9, 0x20);
+    REQUIRE(f.CopyHolds(ListPageFixture::Page, 9));
+}
+
+TEST_CASE("A command list page's copy holds the CPU's bytes the buffer had not taken yet",
+          "[buffer_ports]") {
+    ListPageFixture f;
+    f.Dispatch(ListPageFixture::Page, 0x20, 3);
+    f.cache->DownloadMemory(ListPageFixture::Page, 0x1000);
+    REQUIRE(f.bytes[0x8000] == 3);
+
+    // Later CPU writes to the page reach no cache: only the first is reported.
+    std::memset(f.bytes + 0x8100, 5, 0x20);
+    f.cache->WriteMemory(ListPageFixture::Page + 0x100, 0x20);
+    REQUIRE_FALSE(f.CopyHolds(ListPageFixture::Page, 3));
+
+    f.Work([&] { REQUIRE(f.cache->DMAClear(ListPageFixture::PageGpu, 8, 0x09090909)); });
+    std::memset(f.bytes + 0x8000, 9, 0x20);
+    REQUIRE(f.CopyHolds(ListPageFixture::Page, 9));
+    REQUIRE(f.CopyHolds(ListPageFixture::Page + 0x100, 5));
 }

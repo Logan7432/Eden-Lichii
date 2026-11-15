@@ -413,15 +413,16 @@ void IOFile::Open(const fs::path& path, FileAccessMode mode, FileType type, File
     }
 }
 
-void IOFile::Close() {
+bool IOFile::Close() {
 #if defined(__APPLE__)
     // NO IMPLEMENTATION YET
 #else
     PlatformUnmap(*this);
 #endif
+    bool close_result = true;
     if (file) {
         errno = 0;
-        const auto close_result = std::fclose(file) == 0;
+        close_result = std::fclose(file) == 0;
         if (!close_result) {
             const auto ec = std::error_code{errno, std::generic_category()};
             LOG_ERROR(Common_Filesystem, "Failed to close the file at path={}, ec_message={}",
@@ -429,6 +430,7 @@ void IOFile::Close() {
         }
         file = nullptr;
     }
+    return close_result;
 }
 
 bool IOFile::IsOpen() const {

@@ -163,6 +163,9 @@ public:
     [[nodiscard]] std::optional<std::chrono::steady_clock::time_point> GetSDLLastActivity(
         u32 sdl_instance) const;
 
+    /// Why the device does nothing, when its driver can tell. Empty otherwise.
+    [[nodiscard]] std::string GetDeviceWarning(const Common::ParamPackage& device) const;
+
     /// Reloads the input devices.
     void ReloadInputDevices();
 

@@ -12,6 +12,7 @@
 class QAbstractButton;
 class QButtonGroup;
 class QLabel;
+class QLineEdit;
 
 namespace Core {
 class System;
@@ -61,6 +62,7 @@ private:
     void OnAccentClicked(int index);
 
     std::unique_ptr<Ui::ConfigureUi> ui;
+    QLineEdit* steamgriddb_key_edit = nullptr;
 
     QLabel* accent_label{};
     QLabel* accent_name{};
