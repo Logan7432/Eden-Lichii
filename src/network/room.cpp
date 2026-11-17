@@ -5,7 +5,9 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <iomanip>
+#include <map>
 #include <mutex>
 #include <random>
 #include <regex>
@@ -48,6 +50,13 @@ public:
     UsernameBanList username_ban_list; ///< List of banned usernames
     IPBanList ip_ban_list;             ///< List of banned IP addresses
     mutable std::mutex ban_list_mutex; ///< Mutex for the ban lists
+
+    struct UnknownDestination {
+        std::chrono::steady_clock::time_point last_log{};
+        u64 dropped = 0;
+    };
+    std::map<IPv4Address, UnknownDestination> unknown_destinations;
+    std::mutex unknown_destinations_mutex;
 
     RoomImpl() {}
 
@@ -203,6 +212,8 @@ public:
      * The first 3 bytes are the NintendoOUI 0x00, 0x1F, 0x32
      */
     IPv4Address GenerateFakeIPAddress();
+
+    void LogUnknownDestination(const IPv4Address& address);
 
     /**
      * Broadcasts this packet to all members except the sender.
@@ -819,6 +830,27 @@ IPv4Address Room::RoomImpl::GenerateFakeIPAddress() {
     return IPv4Address{192, 168, 0, 0};
 }
 
+void Room::RoomImpl::LogUnknownDestination(const IPv4Address& address) {
+    constexpr auto log_interval = std::chrono::seconds{30};
+    constexpr std::size_t max_tracked = 256;
+    const auto now = std::chrono::steady_clock::now();
+    std::lock_guard lock(unknown_destinations_mutex);
+    if (unknown_destinations.size() >= max_tracked && !unknown_destinations.contains(address)) {
+        unknown_destinations.clear();
+    }
+    auto& entry = unknown_destinations[address];
+    ++entry.dropped;
+    if (entry.last_log != std::chrono::steady_clock::time_point{} &&
+        now - entry.last_log < log_interval) {
+        return;
+    }
+    LOG_WARNING(Network,
+                "Attempting to send to unknown IP address: {}.{}.{}.{} ({} packet(s) dropped)",
+                address[0], address[1], address[2], address[3], entry.dropped);
+    entry.last_log = now;
+    entry.dropped = 0;
+}
+
 void Room::RoomImpl::HandleProxyPacket(const ENetEvent* event) {
     Packet in_packet;
     in_packet.Append(event->packet->data, event->packet->dataLength);
@@ -869,11 +901,7 @@ void Room::RoomImpl::HandleProxyPacket(const ENetEvent* event) {
         if (member != members.end()) {
             enet_peer_send(member->peer, 0, enet_packet);
         } else {
-            LOG_ERROR(Network,
-                      "Attempting to send to unknown IP address: "
-                      "{}.{}.{}.{}",
-                      destination_address[0], destination_address[1], destination_address[2],
-                      destination_address[3]);
+            LogUnknownDestination(destination_address);
             enet_packet_destroy(enet_packet);
         }
     }
@@ -923,11 +951,7 @@ void Room::RoomImpl::HandleLdnPacket(const ENetEvent* event) {
         if (member != members.end()) {
             enet_peer_send(member->peer, 0, enet_packet);
         } else {
-            LOG_ERROR(Network,
-                      "Attempting to send to unknown IP address: "
-                      "{}.{}.{}.{}",
-                      destination_address[0], destination_address[1], destination_address[2],
-                      destination_address[3]);
+            LogUnknownDestination(destination_address);
             enet_packet_destroy(enet_packet);
         }
     }
