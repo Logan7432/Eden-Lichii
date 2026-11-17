@@ -167,6 +167,8 @@ struct EmitConfig {
 
     // Debugging
     bool very_verbose_debugging_output;
+
+    u64 cache_generation = 0;
 };
 
 // Thrown by EmitArm64 when the block would not fit in max_size bytes of code buffer.

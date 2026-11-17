@@ -116,6 +116,14 @@ public:
     bool IsGpuTickDone(u64 tick) override;
     void NoteGpuWrittenCommandListSynced(DAddr page) override;
     void FlushGpuWrittenCommandListPages(std::span<const DAddr> pages) override;
+    bool Nx2ListSlotsSupported() const override;
+    std::optional<u32> Nx2AcquireListSlot() override;
+    void Nx2ReleaseListSlot(u32 slot) override;
+    void Nx2SnapshotListWords(DAddr device_addr, u32 count, u32 slot) override;
+    void Nx2NoteOwedListWord(DAddr device_addr, u32 value) override;
+    void Nx2NoteInlineQmdGrid(DAddr device_addr, u32 x, u32 y, u32 z) override;
+    void Nx2ReadListSlots(std::span<const u32> slots, std::span<u32> words) override;
+    void Nx2CheckListSlot(u32 slot, std::span<const u32> words) override;
     bool MustFlushRegion(DAddr addr, u64 size,
                          VideoCommon::CacheType which = VideoCommon::CacheType::All) override;
     VideoCore::RasterizerDownloadArea GetFlushArea(DAddr addr, u64 size) override;
@@ -201,8 +209,8 @@ private:
     void CaptureIndirectTrace();
     void CollectIndirectTrace();
     void TraceDrawFailure(std::string_view reason);
-    /// Remembers render target 0 of a draw with one of Ocarina of Time's tonemap shaders.
-    void TrackOotTonemappedImage(const GraphicsPipeline& pipeline);
+    /// Remembers render target 0 of a draw that can hold Ocarina of Time's tonemapped image.
+    void TrackOotTonemappedImage();
     bool TryNx2IndirectReset(bool is_indexed, u32 instance_count);
 
     /// A stretch of a draw whose vertices all carry the same texture handle.
@@ -291,7 +299,7 @@ private:
     /// FSR with the frame.
     void UpdateOcarinaJitter();
     void TrackOcarinaActor(u64 shader_hash, bool is_indexed, bool is_indirect);
-    bool TryOcarinaUpscale(const ComputePipeline& pipeline, bool replace);
+    bool TryOcarinaUpscale(const ComputePipeline& pipeline, u64 native_key, bool replace);
     void ReadOcarinaActor(struct OcarinaActorMesh& mesh);
     /// Records the uniform and storage buffers of the current draw or dispatch for the frame dump.
     bool FrameDumpBuffers(bool compute, std::span<const u64> shader_hashes);
@@ -499,6 +507,10 @@ private:
     /// The pipeline the draw can take the delta path with, or null for a full resolve. Clears
     /// the remembered draw either way: only a recorded draw remembers one again.
     GraphicsPipeline* TakeReusableDraw(bool is_indexed, bool is_indirect);
+    /// Writes the GPU-written list word `real` over its placeholder `value` at `device_addr`
+    /// (Nx2ListIndirect), unless something wrote the word since, and tells the caches.
+    bool Nx2LandOwedWord(DAddr device_addr, u32 value, u32 real);
+
     void InvalidateCachedWrites(std::span<const std::pair<DAddr, std::size_t>> sequences,
                                 bool constant_buffer_data);
     /// Whether the draw TakeReusableDraw took still holds once the caches are locked (serial and
@@ -547,6 +559,10 @@ private:
     /// EDEN_NX2_FAST_DRAW_VERIFY: this draw passed DeltaStillHolds, so UpdateVertexInput compares
     /// the vertex input recorded last with what the registers give now.
     bool verify_vertex_input{};
+    /// The draw's pipeline puts every vertex on the far plane and the game set no polygon offset
+    /// for it: it gets a depth bias towards the far value and depth clamping (see
+    /// UpdateDynamicStates).
+    bool far_plane_draw{};
     VertexInputState recorded_vertex_input;
     bool vertex_input_recorded{};
 

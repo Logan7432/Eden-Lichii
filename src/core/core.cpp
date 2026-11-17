@@ -51,6 +51,7 @@
 #include "core/hle/kernel/k_scheduler.h"
 #include "core/hle/kernel/k_system_control.h"
 #include "core/hle/kernel/kernel.h"
+#include "core/hle/kernel/nx2_thread_stats.h"
 #include "core/hle/kernel/physical_core.h"
 #include "core/hle/service/acc/profile_manager.h"
 #include "core/hle/service/am/applet_manager.h"
@@ -58,6 +59,7 @@
 #include "core/hle/service/am/process_creation.h"
 #include "core/hle/service/apm/apm_controller.h"
 #include "core/hle/service/filesystem/filesystem.h"
+#include "core/hle/service/filesystem/fsp/fs_read_trace.h"
 #include "core/hle/service/friend/resort_doc_adapter.h"
 #include "core/hle/service/friend/resort_doc_bus.h"
 #include "core/hle/service/glue/glue_manager.h"
@@ -406,6 +408,8 @@ struct System::Impl {
             LOG_CRITICAL(Core, "Not enough host memory to start the guest kernel");
             return SystemResultStatus::ErrorMemoryAllocation;
         }
+        Kernel::Nx2ThreadStats::ReadSwitch();
+        Service::FileSystem::ReadTraceScope::ReadSwitch();
         kernel.Initialize();
         return SystemResultStatus::Success;
     }
@@ -418,6 +422,8 @@ struct System::Impl {
         host1x_core.emplace(system);
         VideoCore::CreateGPU(gpu_core, emu_window, system);
         if (!gpu_core) {
+            // As Load does: the kernel is up, and destroying it without its shutdown crashes.
+            ShutdownMainProcess();
             return SystemResultStatus::ErrorVideoCore;
         }
         is_powered_on = true;
@@ -524,6 +530,9 @@ struct System::Impl {
         auto process = Service::AM::CreateApplicationProcess(control, app_loader, load_result, system, file, params.program_id, params.program_index);
         if (load_result != Loader::ResultStatus::Success) {
             LOG_CRITICAL(Core, "Failed to load ROM (Error {})!", load_result);
+            // Its destructor finalizes the KProcess through the kernel: free it before the kernel
+            // shuts down, as a normal stop does.
+            process.reset();
             ShutdownMainProcess();
             return SystemResultStatus(u32(SystemResultStatus::ErrorLoader) + u32(load_result));
         }
@@ -532,6 +541,7 @@ struct System::Impl {
             LOG_CRITICAL(Core, "Failed to obtain loader for {}!", filepath);
             // The kernel is already initialized. Left running, it is destroyed with the global
             // System after main() returns, when device memory is already gone, and exit crashes.
+            process.reset();
             ShutdownMainProcess();
             return SystemResultStatus::ErrorGetLoader;
         }
@@ -560,6 +570,7 @@ struct System::Impl {
         SystemResultStatus init_result{SetupForApplicationProcess(system, emu_window)};
         if (init_result != SystemResultStatus::Success) {
             LOG_CRITICAL(Core, "Failed to initialize system (Error {})!", int(init_result));
+            process.reset();
             ShutdownMainProcess();
             return init_result;
         }
@@ -622,6 +633,12 @@ struct System::Impl {
         // Reset per-game flags
         Settings::values.use_squashed_iterated_blend = false;
 
+        // The cheat VM runs on the timer thread, which keeps running through the teardown, and
+        // reads keys through the service manager and memory through the process. Freed below,
+        // they crashed it (a null ServiceManager at a stop, #1950). Its destructor waits for a
+        // run in progress.
+        cheat_engine.reset();
+
         // Once powered off, services stop writing replies, so a guest thread whose IPC call
         // completes would read its own request back and abort (2010-0212, a Userspace PANIC on
         // every stop). Keep guest threads from running again first; the wait for running ones
@@ -651,7 +668,6 @@ struct System::Impl {
         services.reset();
         service_manager.reset();
         fs_controller.Reset();
-        cheat_engine.reset();
         core_timing.ClearPendingEvents();
         app_loader.reset();
         Common::NoteShutdownProgress();
@@ -663,6 +679,14 @@ struct System::Impl {
         perf_stats.reset();
         cpu_manager.Shutdown();
         debugger.reset();
+        {
+            // The general channel's event is a kernel object made on first use. Left for ~Impl,
+            // it closed at exit() on a kernel already shut down (SIGSEGV in KAutoObject::Close).
+            // Its queued data stays for the next kernel, which remakes the event.
+            std::scoped_lock lk{general_channel_mutex};
+            general_channel_event.reset();
+            general_channel_context.reset();
+        }
         kernel.Shutdown();
         stop_event = {};
         Network::RestartSocketOperations();
@@ -780,6 +804,9 @@ struct System::Impl {
         if (!general_channel_event) {
             general_channel_context.emplace(system, "GeneralChannel");
             general_channel_event.emplace(*general_channel_context);
+            if (!general_channel.empty()) {
+                general_channel_event->Signal(kernel);
+            }
         }
     }
 };
@@ -1239,9 +1266,10 @@ void System::PushGeneralChannelData(std::vector<u8>&& data) {
 
 bool System::TryPopGeneralChannel(std::vector<u8>& out_data) {
     std::scoped_lock lk{impl->general_channel_mutex};
-    if (!impl->general_channel_event || impl->general_channel.empty()) {
+    if (impl->general_channel.empty()) {
         return false;
     }
+    impl->EnsureGeneralChannelInitialized(*this);
     out_data = std::move(impl->general_channel.back());
     impl->general_channel.pop_back();
     if (impl->general_channel.empty()) {

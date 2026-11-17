@@ -33,7 +33,7 @@ std::string_view ExtractName(std::size_t& out_name_size, std::string_view data,
     while (end_index < data.size() && data[end_index] != match) {
         ++end_index;
     }
-    if (end_index == data.size()) {
+    if (end_index >= data.size()) {
         return {};
     }
 

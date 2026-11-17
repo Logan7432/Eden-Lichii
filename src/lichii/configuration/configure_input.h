@@ -90,6 +90,9 @@ public:
     /// Save all button configurations to settings file.
     void ApplyConfiguration();
 
+    /// Revert every player's controllers to their saved configuration.
+    void RestoreConfiguration();
+
     QList<QWidget*> GetSubTabs() const;
 
     /// A player's tab (0-based player)

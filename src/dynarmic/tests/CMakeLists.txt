@@ -49,6 +49,13 @@ if (ARCHITECTURE_riscv64)
     target_link_libraries(dynarmic_tests PRIVATE biscuit::biscuit)
 endif()
 
+if (ARCHITECTURE_arm64)
+    target_sources(dynarmic_tests PRIVATE
+        A64/cache_clear_rsb.cpp
+        A64/shared_fastmem.cpp
+    )
+endif()
+
 if (ARCHITECTURE_x86_64)
     target_link_libraries(dynarmic_tests PRIVATE xbyak::xbyak)
     target_sources(dynarmic_tests PRIVATE

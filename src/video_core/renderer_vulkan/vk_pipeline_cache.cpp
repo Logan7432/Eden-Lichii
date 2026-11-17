@@ -72,6 +72,7 @@
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_shader_cache_v2.h"
 #include "video_core/renderer_vulkan/vk_shader_util.h"
+#include "video_core/renderer_vulkan/vk_state_tracker.h"
 #include "video_core/renderer_vulkan/vk_update_descriptor.h"
 #include "video_core/shader_cache.h"
 #include "video_core/shader_cache_v2/cache_file.h"
@@ -765,13 +766,28 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
         .support_handle_table_arrays = device.IsSampledImageArrayNonUniformIndexingSupported(),
         .needs_lrz_disable = driver_id == VK_DRIVER_ID_QUALCOMM_PROPRIETARY,
     };
+    // MoltenVK allows 16 samplers a stage, but more in sets from update-after-bind pools, which
+    // it puts in Metal argument buffers. Layouts over the core limits take such a pool
+    // (DescriptorLayoutBuilder).
+    if (const auto limits = device.UpdateAfterBindSampledLimits()) {
+        host_info.max_per_stage_descriptor_samplers = limits->per_stage_samplers;
+        host_info.max_per_stage_descriptor_sampled_images = limits->per_stage_sampled_images;
+        host_info.max_per_stage_resources = limits->per_stage_resources;
+        host_info.max_descriptor_set_samplers = limits->set_samplers;
+        host_info.max_descriptor_set_sampled_images = limits->set_sampled_images;
+        LOG_INFO(Render_Vulkan,
+                 "Descriptor sets over the core limits ({} samplers a stage) use update-after-bind "
+                 "pools: up to {} samplers and {} sampled images a stage",
+                 device.GetMaxPerStageDescriptorSamplers(), limits->per_stage_samplers,
+                 limits->per_stage_sampled_images);
+    }
     host_info.ApplyDescriptorLimitPolicy();
 
     LOG_INFO(Render_Vulkan,
              "Bindless handle tables: sampled image arrays indexed per invocation {}, up to {} "
              "sampled images per stage",
              device.IsSampledImageArrayNonUniformIndexingSupported() ? "supported" : "unsupported",
-             device.GetMaxPerStageDescriptorSampledImages());
+             host_info.max_per_stage_descriptor_sampled_images);
 
     if (device.GetMaxVertexInputAttributes() < Maxwell::NumVertexAttributes) {
         LOG_WARNING(Render_Vulkan, "maxVertexInputAttributes is too low: {} < {}",
@@ -1007,7 +1023,26 @@ GraphicsPipeline* PipelineCache::CurrentGraphicsPipeline() {
         current_pipeline = nullptr;
         return nullptr;
     }
+    const bool mesh_draw =
+        maxwell3d->GetNativeMacroEngine().native_turing && maxwell3d->regs.IsMeshEnabled();
+    if (vertex_input_lent && !mesh_draw) {
+        // Refresh keeps the key's vertex input until the registers change it.
+        vertex_input_lent = false;
+        maxwell3d->dirty.flags[Dirty::VertexInput] = true;
+    }
     graphics_key.state.Refresh(*maxwell3d, dynamic_features);
+    if (mesh_draw) {
+        // Before the transitions, which hold the lender's key
+        if (!mesh_vertex_inputs_seeded) {
+            mesh_vertex_inputs_seeded = true;
+            for (const auto& [key, pipeline] : graphics_cache) {
+                if (pipeline && pipeline->IsMeshPipeline()) {
+                    mesh_vertex_inputs.Add(key);
+                }
+            }
+        }
+        vertex_input_lent |= mesh_vertex_inputs.Lend(graphics_key);
+    }
 
     if (current_pipeline) {
         GraphicsPipeline* const next{current_pipeline->Next(graphics_key)};
@@ -1793,8 +1828,9 @@ void PipelineCache::LoadPipelinesV2(u64 title_id,
             },
             job);
     };
-    // With the precache, the prebuild starts after it, as its jobs would queue ahead of the
-    // precache's. The older sessions' pipelines come first.
+    // See PrebuildStartsWithBootBuilds. The older sessions' pipelines come first.
+    const bool prebuild_with_boot = PrebuildStartsWithBootBuilds(
+        precache, use_vulkan_pipeline_cache && !device.CanReadPipelineCacheDuringBuilds());
     const size_t deferred_pipelines = prebuild.size();
     std::vector<VideoCommon::ShaderJobHandle> older_jobs;
     const auto start_prebuild = [&] {
@@ -1836,7 +1872,7 @@ void PipelineCache::LoadPipelinesV2(u64 title_id,
                  std::chrono::duration<double>(std::chrono::steady_clock::now() - load_begin)
                      .count());
     };
-    if (!precache) {
+    if (prebuild_with_boot) {
         start_prebuild();
     }
 
@@ -1853,7 +1889,7 @@ void PipelineCache::LoadPipelinesV2(u64 title_id,
         state.has_loaded = true;
     }
     boot.Wait();
-    if (!precache) {
+    if (prebuild_with_boot) {
         await_older();
     }
     {
@@ -1903,13 +1939,9 @@ void PipelineCache::LoadPipelinesV2(u64 title_id,
     records.clear();
     log.reset();
 
-    // Skip the intermediate save where reading the driver cache during a build crashes (see
-    // Device::CanReadPipelineCacheDuringBuilds): without a precache the background prebuild can
-    // already be building into the cache here, and nothing joins its builds before this read; a
-    // stopped load can leave a cancelled prebuild build running past the same point. The
-    // session-end save in ~PipelineCache stays ordered after the build workers shut down and
-    // still covers persistence.
-    if (use_vulkan_pipeline_cache && device.CanReadPipelineCacheDuringBuilds()) {
+    // The boot builds have all ended (boot.Wait), and where reading the driver cache during a
+    // build crashes the prebuild has not started yet (see PrebuildStartsWithBootBuilds).
+    if (use_vulkan_pipeline_cache) {
         SerializeVulkanPipelineCache(vulkan_pipeline_cache_filename, vulkan_pipeline_cache,
                                      CACHE_VERSION);
         size_t size = 0;
@@ -1944,7 +1976,7 @@ void PipelineCache::LoadPipelinesV2(u64 title_id,
         scheduled_prebuild.reset();
         return;
     }
-    if (precache) {
+    if (!prebuild_with_boot) {
         start_prebuild();
         await_older();
     }
@@ -2177,13 +2209,10 @@ void PipelineCache::QueueVulkanPipelineCacheFlush() {
 }
 
 void PipelineCache::QueueVulkanPipelineCacheSave() {
-    if (!use_vulkan_pipeline_cache || vulkan_pipeline_cache_filename.empty() ||
-        !device.CanReadPipelineCacheDuringBuilds()) {
+    if (!use_vulkan_pipeline_cache || vulkan_pipeline_cache_filename.empty()) {
         return;
     }
-    // Not skipped when a timed flush is in flight: that one may have read the cache before the
-    // stage's last builds. The serialization thread runs the two one after the other.
-    serialization_thread.QueueWork([this] {
+    const auto save = [this] {
         SerializeVulkanPipelineCache(vulkan_pipeline_cache_filename, vulkan_pipeline_cache,
                                      CACHE_VERSION);
         size_t size = 0;
@@ -2191,7 +2220,16 @@ void PipelineCache::QueueVulkanPipelineCacheSave() {
         last_cache_size.store(size, std::memory_order_relaxed);
         LOG_INFO(Render_Vulkan, "Driver pipeline cache saved after the shader precache, {} bytes",
                  size);
-    });
+    };
+    // Here the precache's builds have ended and the prebuild has not started (see
+    // PrebuildStartsWithBootBuilds), so no build runs while this thread reads the cache.
+    if (!device.CanReadPipelineCacheDuringBuilds()) {
+        save();
+        return;
+    }
+    // Not skipped when a timed flush is in flight: that one may have read the cache before the
+    // stage's last builds. The serialization thread runs the two one after the other.
+    serialization_thread.QueueWork(save);
 }
 
 namespace {
@@ -2302,20 +2340,24 @@ void ReportUnsupportedMeshPipeline(const GraphicsPipelineCacheKey& key, const Pr
             others += fmt::format(" {}", line);
         }
     }
+    std::string primitive_attributes;
+    for (const u32 line : info.primitive_lines) {
+        primitive_attributes += fmt::format(" {}", line);
+    }
     with_task += task != nullptr;
     per_primitive += !info.primitive_lines.empty();
     non_triangle += info.topology != 4;
     LOG_WARNING(Render_Vulkan,
                 "Mesh emulation survey #{}: task={} (payload {} words, wg {}x{}x{}) mesh wg "
                 "{}x{}x{} max_vertices={} max_primitives={} topology={} vertex_lines={} "
-                "(position {} generic {} other {}:{}) primitive_lines={} pixel={} | totals: "
+                "(position {} generic {} other {}:{}) primitive_lines={}:{} pixel={} | totals: "
                 "task {} per-primitive {} non-triangle {}",
                 total, task != nullptr, info.payload_words, task ? task->workgroup_size[0] : 0,
                 task ? task->workgroup_size[1] : 0, task ? task->workgroup_size[2] : 0,
                 mesh->workgroup_size[0], mesh->workgroup_size[1], mesh->workgroup_size[2],
                 info.max_vertices, info.max_primitives, info.topology, info.vertex_lines.size(),
-                position, generic, other, others, info.primitive_lines.size(), has_pixel,
-                with_task, per_primitive, non_triangle);
+                position, generic, other, others, info.primitive_lines.size(), primitive_attributes,
+                has_pixel, with_task, per_primitive, non_triangle);
 }
 } // Anonymous namespace
 
@@ -2747,7 +2789,7 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
             std::span{stages.data(), num_stages}, host_info);
     }
     // Mesh emulation without VK_EXT_mesh_shader (prototype): a mesh program, after an optional
-    // task program, drawing triangles without per-primitive outputs, before a pixel program only.
+    // task program, before a pixel program only.
     std::optional<MeshEmulationSetup> mesh_emulation;
     size_t mesh_index{};
     if (mesh_unsupported) {
@@ -2766,7 +2808,6 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
         // Points (0), lines (1) and triangles (4).
         const u32 topology{mesh.mesh.topology};
         eligible = eligible && (topology == 0 || topology == 1 || topology == 4) &&
-                   mesh.mesh.primitive_lines.empty() &&
                    !mesh.mesh.vertex_lines.empty() && mesh.mesh.max_vertices != 0 &&
                    mesh.mesh.max_primitives != 0;
         for (size_t index = 1; index < Maxwell::MaxShaderProgram && eligible; ++index) {
@@ -2775,6 +2816,56 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
                        programs[index].stage == Shader::Stage::Fragment;
         }
         if (!eligible) {
+            return nullptr;
+        }
+        // Per-primitive outputs reach the pixel program flat through the vertex shader. A vertex
+        // shader writes Layer and ViewportIndex only with VK_EXT_shader_viewport_index_layer, and
+        // PrimitiveId goes through a generic location nothing else uses.
+        std::bitset<Shader::IR::NUM_GENERICS> vertex_generics, primitive_generics;
+        for (const u32 line : mesh.mesh.vertex_lines) {
+            const auto attribute{static_cast<Shader::IR::Attribute>(line)};
+            if (Shader::IR::IsGeneric(attribute)) {
+                vertex_generics.set(Shader::IR::GenericAttributeIndex(attribute));
+            }
+        }
+        bool writes_primitive_id{};
+        const char* primitive_reason{};
+        for (const u32 line : mesh.mesh.primitive_lines) {
+            const auto attribute{static_cast<Shader::IR::Attribute>(line)};
+            if (Shader::IR::IsGeneric(attribute)) {
+                primitive_generics.set(Shader::IR::GenericAttributeIndex(attribute));
+            } else if (attribute == Shader::IR::Attribute::PrimitiveId) {
+                writes_primitive_id = true;
+            } else if ((attribute == Shader::IR::Attribute::Layer ||
+                        attribute == Shader::IR::Attribute::ViewportIndex) &&
+                       !profile.support_viewport_index_layer_non_geometry) {
+                primitive_reason =
+                    "Layer or ViewportIndex without VK_EXT_shader_viewport_index_layer";
+            }
+        }
+        if ((vertex_generics & primitive_generics).any()) {
+            primitive_reason = "a generic written both per vertex and per primitive";
+        }
+        const size_t pixel_index{static_cast<size_t>(Maxwell::ShaderType::Pixel)};
+        const Shader::Info* const pixel{
+            key.unique_hashes[pixel_index] != 0 ? &programs[pixel_index].info : nullptr};
+        u32 primitive_id_location{~0U};
+        if (writes_primitive_id && pixel && pixel->loads[Shader::IR::Attribute::PrimitiveId]) {
+            const auto used{vertex_generics | primitive_generics};
+            for (u32 index = 0; index < Shader::IR::NUM_GENERICS && !pixel->loads.Legacy();
+                 ++index) {
+                if (!used[index] && !pixel->loads.Generic(index)) {
+                    primitive_id_location = index;
+                    break;
+                }
+            }
+            if (primitive_id_location == ~0U) {
+                primitive_reason = "no free generic location for PrimitiveId";
+            }
+        }
+        if (primitive_reason) {
+            LOG_WARNING(Render_Vulkan, "Mesh emulation skipped for pipeline {:016x}: {}", hash,
+                        primitive_reason);
             return nullptr;
         }
         // Task and mesh share the compute stage, including the fallback's storage buffers.
@@ -2816,9 +2907,9 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
             }
         }
         if (compute_storage_buffers > device.GetMaxPerStageDescriptorStorageBuffers() ||
-            compute_sampled_images > device.GetMaxPerStageDescriptorSampledImages() ||
-            compute_samplers > device.GetMaxPerStageDescriptorSamplers() ||
-            compute_resources > device.GetMaxPerStageResources()) {
+            compute_sampled_images > host_info.max_per_stage_descriptor_sampled_images ||
+            compute_samplers > host_info.max_per_stage_descriptor_samplers ||
+            compute_resources > host_info.max_per_stage_resources) {
             LOG_WARNING(
                 Render_Vulkan,
                 "Mesh emulation skipped: {} storage buffers, {} sampled images, {} samplers "
@@ -2829,6 +2920,7 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
         }
         mesh_emulation.emplace();
         mesh_emulation->output_binding = output_binding;
+        mesh_emulation->primitive_id_location = primitive_id_location;
         if (has_task) {
             // After the output: the task payload, offset and argument buffers.
             mesh_emulation->has_task = true;
@@ -2987,8 +3079,13 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
                     profile, program.mesh, mesh_emulation->output_binding,
                     mesh_emulation->has_task ? mesh_emulation->args_binding : ~0U,
                     runtime_info.convert_depth_mode && !profile.support_native_ndc,
-                    runtime_info.fixed_state_point_size.value_or(1.0f));
+                    runtime_info.fixed_state_point_size.value_or(1.0f),
+                    mesh_emulation->primitive_id_location);
             }
+        }
+        if (mesh_emulation && program.stage == Shader::Stage::Fragment) {
+            runtime_info.per_primitive_flat = true;
+            runtime_info.primitive_id_location = mesh_emulation->primitive_id_location;
         }
         ConvertLegacyToGeneric(program, runtime_info);
         if (index == static_cast<size_t>(Maxwell::ShaderType::Geometry)) {
