@@ -1187,7 +1187,7 @@ struct Values {
     // Network
     Setting<std::string> network_interface{linkage, std::string(), "network_interface",
                                            Category::Network};
-    SwitchableSetting<bool> airplane_mode{linkage, true, "airplane_mode", Category::Network};
+    SwitchableSetting<bool> airplane_mode{linkage, false, "airplane_mode", Category::Network};
     Setting<bool> lan_play{linkage, false, "lan_play", Category::Network};
     Setting<bool> nextendo_enabled{linkage, false, "nextendo_enabled", Category::Network};
     // Replaces the current user's nickname and icon with the Nextendo account's.
