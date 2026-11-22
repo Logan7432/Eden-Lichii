@@ -676,6 +676,7 @@ private:
     bool emulation_running = false;
     std::optional<CompatibilityReporting::Session> report_session;
     bool boot_in_progress = false;
+    bool forced_update_running = false;
     bool mod_store_open = false;
     QMetaObject::Connection startup_qlaunch_connection;
     bool close_pending = false;

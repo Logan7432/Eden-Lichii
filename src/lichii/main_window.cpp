@@ -8212,7 +8212,7 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
         shader_warm_dialog->activateWindow();
         return;
     }
-    if (boot_in_progress || close_pending || mod_store_open) {
+    if (boot_in_progress || close_pending || mod_store_open || forced_update_running) {
         return;
     }
     disconnect(startup_qlaunch_connection);
@@ -12250,6 +12250,16 @@ void MainWindow::OnEmulatorUpdateAvailable() {
     }
 
     const auto& release = *result.update;
+    if (!manual && !emulation_running && !boot_in_progress && !close_pending &&
+        !startup_qlaunch_connection && QCoreApplication::arguments().size() <= 1) {
+        UpdateDialog updater(release, this);
+        if (updater.CanInstallWithoutPrompts()) {
+            forced_update_running = true;
+            updater.InstallWithoutPrompts();
+            forced_update_running = false;
+            return;
+        }
+    }
     const auto now = static_cast<unsigned long long>(QDateTime::currentSecsSinceEpoch());
     if (!manual && (UISettings::values.skipped_update_tag.GetValue() == release.tag ||
                     UISettings::values.update_remind_at.GetValue() > now)) {

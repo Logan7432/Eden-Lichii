@@ -35,7 +35,7 @@
 #undef GetSaveFileName
 
 UpdateDialog::UpdateDialog(const Common::Net::Release& release, QWidget* parent)
-    : QDialog(parent), ui(new Ui::UpdateDialog) {
+    : QDialog(parent), ui(new Ui::UpdateDialog), m_tag(release.tag) {
     ui->setupUi(this);
 
     ui->version->setText(
@@ -149,6 +149,46 @@ QString UpdateDialog::PendingRestart() {
     return pending_restart;
 }
 
+namespace {
+std::filesystem::path ForcedTagPath() {
+    return std::filesystem::path{QCoreApplication::applicationDirPath().toStdWString()} /
+           ".update-forced-tag";
+}
+
+std::string ReadForcedTag() {
+    QFile file{QString::fromStdWString(ForcedTagPath().wstring())};
+    if (!file.open(QIODevice::ReadOnly)) {
+        return {};
+    }
+    return file.readAll().trimmed().toStdString();
+}
+}
+
+bool UpdateDialog::CanInstallWithoutPrompts() const {
+#ifdef _WIN32
+    if (!m_asset.filename.ends_with(".zip") || m_tag.empty() || ReadForcedTag() == m_tag) {
+        return false;
+    }
+    const std::filesystem::path exe{QCoreApplication::applicationFilePath().toStdWString()};
+    std::error_code ec;
+    if (std::filesystem::exists(exe.parent_path().parent_path().parent_path() / "CMakeCache.txt",
+                                ec)) {
+        return false;
+    }
+    return UpdateInstaller::CanReplace(exe);
+#else
+    return false;
+#endif
+}
+
+void UpdateDialog::InstallWithoutPrompts() {
+#ifdef _WIN32
+    LOG_INFO(Frontend, "Installing {} without prompts", m_tag);
+    InstallOnRestart(
+        std::filesystem::path{QCoreApplication::applicationFilePath().toStdWString()}, false);
+#endif
+}
+
 #ifdef _WIN32
 bool UpdateDialog::LaunchInstaller(QWidget* window, const QString& staging) {
     const QString program = QCoreApplication::applicationFilePath();
@@ -177,7 +217,7 @@ void UpdateDialog::Download() {
     if (m_asset.filename.ends_with(".zip")) {
         const std::filesystem::path exe{QCoreApplication::applicationFilePath().toStdWString()};
         if (UpdateInstaller::CanReplace(exe)) {
-            InstallOnRestart(exe);
+            InstallOnRestart(exe, true);
             return;
         }
     }
@@ -256,7 +296,22 @@ void UpdateDialog::InstallInPlace(const std::filesystem::path& target) {
 }
 
 #ifdef _WIN32
-void UpdateDialog::InstallOnRestart(const std::filesystem::path& exe) {
+void UpdateDialog::InstallOnRestart(const std::filesystem::path& exe, bool ask) {
+    const UpdateInstaller::Lock lock{UpdateInstaller::LockPath(exe)};
+    if (!lock.Held()) {
+        if (ask) {
+            QtCommon::Frontend::Critical(tr("Failed to install the update"),
+                                         tr("Another Eden window is already updating this "
+                                            "installation."));
+        }
+        return;
+    }
+    if (!ask) {
+        QFile marker{QString::fromStdWString(ForcedTagPath().wstring())};
+        if (marker.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+            marker.write(QByteArray::fromStdString(m_tag));
+        }
+    }
     const auto install_dir = exe.parent_path();
     const auto staging = install_dir / ".update-staging";
     const auto archive = install_dir / ".update-download.zip";
@@ -300,13 +355,17 @@ void UpdateDialog::InstallOnRestart(const std::filesystem::path& exe) {
     }
     std::filesystem::remove(archive, ec);
 
-    const auto button = QtCommon::Frontend::Question(
-        tr("Update Ready"),
-        tr("Eden will install the update, close and start again. The previous version is "
-           "kept, and your settings and data are not changed.\n\nRestart now?"),
-        QtCommon::Frontend::Yes | QtCommon::Frontend::No);
-    if (button != QtCommon::Frontend::Yes ||
-        !LaunchInstaller(parentWidget(), QString::fromStdWString(staging.wstring()))) {
+    if (ask && QtCommon::Frontend::Question(
+                   tr("Update Ready"),
+                   tr("Eden will install the update, close and start again. The previous "
+                      "version is kept, and your settings and data are not changed.\n\n"
+                      "Restart now?"),
+                   QtCommon::Frontend::Yes | QtCommon::Frontend::No) !=
+                   QtCommon::Frontend::Yes) {
+        cleanup();
+        return;
+    }
+    if (!LaunchInstaller(parentWidget(), QString::fromStdWString(staging.wstring()))) {
         cleanup();
     }
 }

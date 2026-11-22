@@ -33,6 +33,9 @@ public:
 
     static QString PendingRestart();
 
+    bool CanInstallWithoutPrompts() const;
+    void InstallWithoutPrompts();
+
 private slots:
     void Download();
 
@@ -43,10 +46,11 @@ private:
     void InstallInPlace(const std::filesystem::path& target);
 #ifdef _WIN32
     // Download and unpack the new version beside the running one, then install it.
-    void InstallOnRestart(const std::filesystem::path& exe);
+    void InstallOnRestart(const std::filesystem::path& exe, bool ask);
 #endif
 
     Ui::UpdateDialog* ui;
     QList<QRadioButton*> m_buttons;
     Common::Net::Asset m_asset;
+    std::string m_tag;
 };
