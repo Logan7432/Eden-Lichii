@@ -212,7 +212,7 @@ void FlyHighPanel::Refresh() {
     if (!library) {
         status_label->setText(
             Tr("<b>Library missing:</b> flyhigh.dll (libflyhigh.so on Linux) must be beside "
-               "Eden. Eden's release archives include it."));
+               "Eden."));
     } else if (!model) {
         status_label->setText(Tr("<b>Model needed:</b> FlyHigh's network weights, about %1 MB, "
                                  "are downloaded once into the user folder.")

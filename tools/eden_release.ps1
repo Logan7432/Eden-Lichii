@@ -370,7 +370,8 @@ try {
     if (Test-Path -LiteralPath $source -PathType Leaf) {
         Copy-Item -LiteralPath $source -Destination $stage
     }
-    Get-ChildItem -LiteralPath $BinDir -Filter '*.dll' -File | ForEach-Object {
+    Get-ChildItem -LiteralPath $BinDir -Filter '*.dll' -File |
+        Where-Object { $_.Name -ne 'flyhigh.dll' } | ForEach-Object {
         Copy-Item -LiteralPath $_.FullName -Destination $stage
     }
     $qtFolders = 'plugins', 'platforms', 'styles', 'imageformats', 'iconengines', 'tls', 'generic',
