@@ -65,7 +65,6 @@
 #include "applets/qt_software_keyboard.h"
 #include "applets/qt_web_browser.h"
 
-#include "configuration/configuration_shared.h"
 #include "configuration/configure_dialog.h"
 #include "configuration/configure_input.h"
 #include "configuration/configure_network.h"
@@ -88,7 +87,6 @@
 #include <QActionGroup>
 #include <QCheckBox>
 #include <QClipboard>
-#include <QDate>
 #include <QDesktopServices>
 #include <QDir>
 #include <QElapsedTimer>
@@ -457,7 +455,6 @@ MainWindow::MainWindow(bool has_broken_vulkan)
 
     Common::FS::CreateEdenPaths();
     this->config = std::make_unique<QtConfig>();
-    const bool first_start = UISettings::values.first_start.GetValue();
 
     Common::Log::Filter filter;
     filter.ParseFilterString(Settings::values.log_filter.GetValue());
@@ -485,6 +482,14 @@ MainWindow::MainWindow(bool has_broken_vulkan)
 
     default_theme_paths = QIcon::themeSearchPaths();
 
+    // The first launch after an interface update switches to Lichii Dark and explains what moved.
+    const bool whats_new_pending =
+        UISettings::values.whats_new_version.GetValue() < WhatsNewDialog::Version;
+    if (whats_new_pending) {
+        UISettings::values.whats_new_version = WhatsNewDialog::Version;
+        UISettings::values.theme =
+            UISettings::themes[static_cast<size_t>(UISettings::Theme::LichiiDark)].second;
+    }
     UpdateUITheme();
 
     SetDiscordEnabled(UISettings::values.enable_discord_presence.GetValue());
@@ -636,18 +641,13 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     }
     const bool launch_home = launch && launch->filepath.empty() && !launch->launch_setup &&
                              launch->launch_qlaunch;
-    const bool launching_content =
-        launch && (!launch->filepath.empty() || launch->launch_setup || launch->launch_qlaunch ||
-                   launch->launch_hlaunch);
-    const auto build = WhatsNewDialog::ParseBuildTag(Common::g_build_release_tag);
-    const auto whats_new_action = WhatsNewDialog::OnStartup(
-        build, UISettings::values.last_seen_release.GetValue(), first_start, launching_content,
-        LICHII_USE_PENDING_RELEASE_NOTES);
-    if (whats_new_action == WhatsNewDialog::StartupAction::Remember) {
-        config->SaveLastSeenRelease(build);
-    }
     if (!launch_home) {
         game_list->PopulateAsync(UISettings::values.game_dirs);
+    }
+
+    if (whats_new_pending && !UISettings::values.first_start.GetValue() &&
+        UISettings::values.show_whats_new.GetValue()) {
+        QTimer::singleShot(0, this, &MainWindow::OnWhatsNew);
     }
 
     // Set up game list mode checkboxes.
@@ -780,11 +780,6 @@ MainWindow::MainWindow(bool has_broken_vulkan)
                 QString::fromStdString(hbl_path),
                 LibraryAppletParameters(0x010000000000100Dull, Service::AM::AppletId::QLaunch));
         }
-    }
-
-    if (whats_new_action == WhatsNewDialog::StartupAction::Show) {
-        startup_whats_new_pending = true;
-        QTimer::singleShot(0, this, &MainWindow::MaybeShowStartupWhatsNew);
     }
 }
 
@@ -2377,9 +2372,6 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
     if (boot_in_progress || close_pending) {
         return;
     }
-    if (whats_new_dialog) {
-        whats_new_dialog->close();
-    }
     disconnect(startup_qlaunch_connection);
     boot_in_progress = true;
     game_list->SetScanEnabled(false);
@@ -2392,9 +2384,6 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
         if (!emulation_running && !close_pending) {
             game_list->SetScanEnabled(true);
             game_list->PopulateAsync(UISettings::values.game_dirs);
-            if (startup_whats_new_pending) {
-                QTimer::singleShot(0, this, &MainWindow::MaybeShowStartupWhatsNew);
-            }
         }
         if (close_pending) {
             QTimer::singleShot(0, this, &QWidget::close);
@@ -3038,9 +3027,6 @@ void MainWindow::OnEmulationStopped() {
     } else if (!boot_in_progress) {
         game_list->SetScanEnabled(true);
         game_list->PopulateAsync(UISettings::values.game_dirs);
-        if (startup_whats_new_pending) {
-            QTimer::singleShot(0, this, &MainWindow::MaybeShowStartupWhatsNew);
-        }
     }
 }
 
@@ -4860,49 +4846,11 @@ void MainWindow::OnInstallDecryptionKeys() {
     OnCheckFirmwareDecryption();
 }
 
-void MainWindow::MaybeShowStartupWhatsNew() {
-    if (!startup_whats_new_pending || !isVisible() || UISettings::values.first_start.GetValue() ||
-        boot_in_progress || emulation_running || close_pending) {
-        return;
-    }
-    constexpr auto retry_connection = Qt::ConnectionType(Qt::QueuedConnection |
-                                                         Qt::SingleShotConnection |
-                                                         Qt::UniqueConnection);
-#ifdef ENABLE_UPDATE_CHECKER
-    if (update_check_running) {
-        connect(&update_watcher, &QFutureWatcher<UpdateChecker::CheckResult>::finished, this,
-                &MainWindow::MaybeShowStartupWhatsNew, retry_connection);
-        return;
-    }
-#endif
-    if (auto* const modal = QApplication::activeModalWidget()) {
-        if (auto* const dialog = qobject_cast<QDialog*>(modal)) {
-            connect(dialog, &QDialog::finished, this, &MainWindow::MaybeShowStartupWhatsNew,
-                    retry_connection);
-        }
-        return;
-    }
-    OnWhatsNew();
-}
-
 void MainWindow::OnWhatsNew() {
-    startup_whats_new_pending = false;
-    if (whats_new_dialog && whats_new_dialog->isVisible()) {
-        whats_new_dialog->raise();
-        whats_new_dialog->activateWindow();
-        return;
-    }
-
-    const auto build = WhatsNewDialog::ParseBuildTag(Common::g_build_release_tag);
-    const auto date = QDate::fromString(QString::fromLatin1(Common::g_build_date).left(10),
-                                       Qt::ISODate);
-    whats_new_dialog = new WhatsNewDialog(build, date, LICHII_USE_PENDING_RELEASE_NOTES, this);
-    whats_new_dialog->setAttribute(Qt::WA_DeleteOnClose);
-    ConfigurationShared::FitToScreen(whats_new_dialog, QSize(600, 740));
-    whats_new_dialog->show();
-
-    if (build && build != UISettings::values.last_seen_release.GetValue()) {
-        config->SaveLastSeenRelease(build);
+    WhatsNewDialog dialog(this);
+    dialog.exec();
+    if (dialog.OpenConfigureRequested()) {
+        OnConfigure();
     }
 }
 
