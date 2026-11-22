@@ -82,7 +82,7 @@ public:
 signals:
     void LaunchRequested(const QString& path, quint64 program_id);
     void FavoriteToggleRequested(quint64 program_id);
-    void SettingsRequested(const QString& path);
+    void SettingsRequested(const QString& path, quint64 program_id);
     void ContextMenuRequested(const QString& path, quint64 program_id, const QPoint& global_pos);
     void EmptyContextMenuRequested(const QPoint& global_pos);
     void AddFolderRequested();

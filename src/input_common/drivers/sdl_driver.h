@@ -8,6 +8,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -26,6 +27,9 @@ union SDL_Event;
 namespace InputCommon {
 
 class SDLJoystick;
+#ifdef HAVE_SWITCH2_BLE
+class Switch2Ble;
+#endif
 
 using ButtonBindings =
     std::array<std::pair<Settings::NativeButton::Values, SDL_GamepadButton>, 20>;
@@ -143,5 +147,8 @@ private:
 
     std::atomic<bool> initialized = false;
     bool start_thread;
+#ifdef HAVE_SWITCH2_BLE
+    std::unique_ptr<Switch2Ble> switch2_ble;
+#endif
 };
 } // namespace InputCommon

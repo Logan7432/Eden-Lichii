@@ -260,6 +260,7 @@ signals:
 public slots:
     void OnLoadComplete();
     void OnExecuteProgram(std::size_t program_index);
+    void OnLaunchInNewSession(u64 program_id);
     void OnExit();
     void OnSaveConfig();
     void AmiiboSettingsShowDialog(const Core::Frontend::CabinetParameters& parameters,
@@ -399,6 +400,7 @@ private slots:
     void OnGameListConvertToNup(const std::string& game_path);
     void OnGameListPrepareShaderWarm(u64 program_id, const std::string& game_path);
     void OnGameListDeleteShaderWarm(u64 program_id);
+    void OnGameListPrecompileShaders(u64 program_id, const std::string& game_path, bool on);
     void PrepareShaderPrecache(u64 title_id, const std::filesystem::path& game_path);
     void OnGameListExtractNup(const std::string& game_path);
     void OnGameListEditNupMetadata(const std::string& game_path);
@@ -408,7 +410,7 @@ private slots:
     void OnGameListOpenDirectory(const QString& directory);
     void OnGameListAddDirectory();
     void OnGameListShowList(bool show);
-    void OnGameListOpenPerGameProperties(const std::string& file);
+    void OnGameListOpenPerGameProperties(u64 title_id, const std::string& file);
     void OnLinkToRyujinx(const u64& program_id);
     void OnMenuLoadFile();
     void OnMenuLoadFolder();
@@ -668,6 +670,7 @@ private:
     bool emulation_running = false;
     std::optional<CompatibilityReporting::Session> report_session;
     bool boot_in_progress = false;
+    QMetaObject::Connection startup_qlaunch_connection;
     bool close_pending = false;
     // The path to the game currently running
     QString current_game_path;

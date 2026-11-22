@@ -562,6 +562,20 @@ bool ClearRenewedAccount(const Common::UUID& profile, u64 generation, SignOutRea
     return true;
 }
 
+// Saves a finished sign-in unless the profile was signed out or deleted after generation was read.
+// A renewal that gave up on the old session in the meantime (it leaves a sign-out reason) doesn't
+// count: the new sign-in replaces that session.
+bool SaveSignedInAccount(const Common::UUID& profile, const Account& account, u64 generation) {
+    std::scoped_lock lock{account_mutex};
+    if (generation != GenerationLocked(profile) &&
+        accounts[profile].sign_out_reason == SignOutReason::None) {
+        return false;
+    }
+    NewAccountGenerationLocked(profile);
+    void(WriteAccountLocked(profile, account));
+    return true;
+}
+
 void ExpireGameToken(const Common::UUID& profile, const std::string& nex_token) {
     std::scoped_lock lock{account_mutex};
     auto account = LoadAccountLocked(profile);
@@ -799,6 +813,40 @@ void ClearAccount(const Common::UUID& profile) {
     ClearAccountLocked(profile);
 }
 
+std::vector<Common::UUID> OrphanAccounts(std::span<const Common::UUID> profiles) {
+    std::vector<Common::UUID> orphans;
+    if (profiles.empty()) {
+        return orphans;
+    }
+    const auto is_formatted_uuid = [](std::string_view text) {
+        if (text.size() != 36) {
+            return false;
+        }
+        for (std::size_t i = 0; i < text.size(); ++i) {
+            const bool dash = i == 8 || i == 13 || i == 18 || i == 23;
+            if (dash ? text[i] != '-' : !std::isxdigit(static_cast<unsigned char>(text[i]))) {
+                return false;
+            }
+        }
+        return true;
+    };
+    std::error_code ec;
+    for (const auto& entry : std::filesystem::directory_iterator{
+             FS::GetEdenPath(FS::EdenPath::ConfigDir) / "nextendo", ec}) {
+        const auto& path = entry.path();
+        const std::string stem = path.stem().string();
+        if (path.extension() != ".json" || !is_formatted_uuid(stem)) {
+            continue;
+        }
+        const Common::UUID profile{stem};
+        if (profile.IsValid() && AccountPath(profile) == path &&
+            std::ranges::find(profiles, profile) == profiles.end()) {
+            orphans.push_back(profile);
+        }
+    }
+    return orphans;
+}
+
 void MigrateAccountFile(const Common::UUID& profile) {
     if (profile.IsInvalid()) {
         return;
@@ -975,6 +1023,13 @@ SignInResult SignIn(std::string_view client_id, const Common::UUID& profile,
             sign_in_running = false;
         }
     } running;
+    // Deleting the profile or signing it out while the browser step runs clears its account; the
+    // sign-in must not write it back with a live refresh token afterwards.
+    u64 generation;
+    {
+        std::scoped_lock lock{account_mutex};
+        generation = GenerationLocked(profile);
+    }
 
     std::mutex mutex;
     std::condition_variable_any cv;
@@ -1128,7 +1183,17 @@ SignInResult SignIn(std::string_view client_id, const Common::UUID& profile,
         FetchUserInfo(api, client_id, account);
     }
 
-    SaveAccount(profile, account);
+    if (!SaveSignedInAccount(profile, account, generation)) {
+        LOG_WARNING(Common, "The Nextendo profile was signed out or deleted during the sign-in; "
+                            "revoking the new sign-in");
+        if (!account.refresh_token.empty()) {
+            RevokeToken(client_id, account.refresh_token);
+        }
+        out.account = {};
+        out.online_status.reset();
+        out.error = "The profile was signed out or deleted during the sign-in.";
+        return out;
+    }
     out.ok = true;
     return out;
 }

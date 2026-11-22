@@ -107,6 +107,10 @@ u64 ParseBaasNsa(std::string_view text);
 std::optional<Account> LoadAccount(const Common::UUID& profile);
 void SaveAccount(const Common::UUID& profile, const Account& account);
 void ClearAccount(const Common::UUID& profile);
+// The profiles with an account file that are not in profiles: deleted by a build that left the
+// account behind, or on another NAND, since the accounts live with the config. Empty when profiles
+// is, which is what a profile list that could not be read looks like.
+std::vector<Common::UUID> OrphanAccounts(std::span<const Common::UUID> profiles);
 // Moves the account of builds that kept a single one to profile, unless profile has one already.
 void MigrateAccountFile(const Common::UUID& profile);
 
@@ -201,7 +205,11 @@ struct SignInResult {
 // Opens the authorize page through open_url, waits up to five minutes (or until stop) for the
 // loopback callback, exchanges the code for tokens and saves the account to profile. The callback
 // listens on CallbackPort, or on a free port when another program holds that one. Only one sign-in
-// runs at a time.
+// runs at a time. When the user signs the profile out or deletes it while it runs, nothing is
+// saved and the result has an error and an empty account; it also asks the server to revoke the new
+// refresh token, but only logs a failed revoke, so the token may stay valid there until it expires.
+// A session that a renewal signed out in the meantime (the site ended it, or refused its refresh
+// token) doesn't count: the new sign-in replaces it.
 SignInResult SignIn(std::string_view client_id, const Common::UUID& profile,
                     const std::function<void(const std::string&)>& open_url, std::stop_token stop);
 

@@ -55,8 +55,12 @@ public:
         if (!member || !IsJoined(*member)) {
             return;
         }
+        const auto identity = member->GetENetIdentity();
+        if (!identity) {
+            return;
+        }
         Network::ProxyPacket packet{};
-        packet.local_endpoint = {Network::Domain::INET, member->GetFakeIpAddress(), WirePort};
+        packet.local_endpoint = {Network::Domain::INET, identity->ip, WirePort};
         packet.remote_endpoint = {Network::Domain::INET,
                                   target_ip ? ToAddress(*target_ip)
                                             : Network::IPv4Address{255, 255, 255, 255},
@@ -64,13 +68,14 @@ public:
         packet.protocol = static_cast<Network::Protocol>(WireProtocol);
         packet.broadcast = !target_ip.has_value();
         packet.data = std::move(message);
+        packet.enet_generation = identity->generation;
         member->SendProxyPacket(packet);
     }
 };
 
 std::vector<RoomMemberView> CollectMembers(const Network::RoomMember& member) {
     std::vector<RoomMemberView> views;
-    for (const auto& info : member.GetMemberInformation()) {
+    for (const auto& info : member.GetMemberInformationSnapshot()) {
         views.push_back({ToU32(info.fake_ip), info.game_info.id, info.nickname});
     }
     return views;

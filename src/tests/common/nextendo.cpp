@@ -11,6 +11,7 @@
 #include <map>
 #include <mutex>
 #include <random>
+#include <span>
 #include <string>
 #include <thread>
 #include <vector>
@@ -25,6 +26,8 @@
 #include "common/nextendo.h"
 #include "common/nextendo_game_catalog.h"
 #include "common/settings.h"
+#include "core/hle/service/acc/profile_manager.h"
+#include "tests/common/restore_eden_path.h"
 
 namespace Nextendo = Common::Nextendo;
 
@@ -189,7 +192,8 @@ public:
         Common::FS::SetEdenPath(Common::FS::EdenPath::CacheDir, directory);
 
         const auto handle = [this](const httplib::Request& request, httplib::Response& response) {
-            std::scoped_lock lock{mutex};
+            std::function<void()> hook;
+            std::unique_lock lock{mutex};
             ++hits[request.path];
             authorization[request.path] = request.get_header_value("Authorization");
             forms[request.path] = request.params;
@@ -201,6 +205,13 @@ public:
             }
             response.status = reply.status;
             response.set_content(reply.body, "application/json");
+            if (auto before = befores.extract(request.path)) {
+                hook = std::move(before.mapped());
+            }
+            lock.unlock();
+            if (hook) {
+                hook();
+            }
         };
         server.Get(".*", handle);
         server.Post(".*", handle);
@@ -219,8 +230,8 @@ public:
         Nextendo::ClearAccount(Profile);
         Nextendo::ClearAccount(OtherProfile);
         Nextendo::SetApiBaseForTests(std::string{Nextendo::ApiBase});
-        Common::FS::SetEdenPath(Common::FS::EdenPath::ConfigDir, previous_config);
-        Common::FS::SetEdenPath(Common::FS::EdenPath::CacheDir, previous_cache);
+        Tests::RestoreEdenPath(Common::FS::EdenPath::ConfigDir, previous_config);
+        Tests::RestoreEdenPath(Common::FS::EdenPath::CacheDir, previous_cache);
         std::error_code ec;
         std::filesystem::remove_all(directory, ec);
     }
@@ -228,6 +239,13 @@ public:
     void Answer(const std::string& path, int status, std::string body) {
         std::scoped_lock lock{mutex};
         replies[path].push_back({status, std::move(body)});
+    }
+
+    // Runs once, on the server's thread and outside its lock, before the reply to the next request
+    // to path is sent.
+    void Before(const std::string& path, std::function<void()> hook) {
+        std::scoped_lock lock{mutex};
+        befores[path] = std::move(hook);
     }
 
     int Hits(const std::string& path) {
@@ -279,6 +297,7 @@ private:
     std::map<std::string, std::string> authorization;
     std::map<std::string, httplib::Params> forms;
     std::map<std::string, std::string> bodies;
+    std::map<std::string, std::function<void()>> befores;
 };
 
 Nextendo::Account OtherSignedIn() {
@@ -580,6 +599,60 @@ TEST_CASE("Nextendo: a declined sign-in is not asked again", "[common]") {
     REQUIRE(result.error == "access_denied: The player declined the scopes");
     REQUIRE(browser.scopes == std::vector<std::string>{FullScope});
     REQUIRE(fake.TotalHits() == 0);
+}
+
+TEST_CASE("Nextendo: a sign-in does not save a profile cleared while it ran", "[common]") {
+    FakeNextendo fake;
+    fake.Answer(TokenPath, 200, NewAccessToken);
+    fake.Answer(NexTokenPath, 200, NewGameToken);
+    fake.Answer("/api/oauth/revoke", 200, R"({"ok":true})");
+    const auto account_file = Common::FS::GetEdenPath(Common::FS::EdenPath::ConfigDir) /
+                              "nextendo" / fmt::format("{}.json", Profile.FormattedString());
+
+    // The profile is deleted while the browser step runs.
+    fake.Before(TokenPath, [] { Nextendo::ClearAccount(Profile); });
+    FakeBrowser browser{{"code=abc"}};
+    const auto result = Nextendo::SignIn(ClientId, Profile, browser.Opener(), {});
+    REQUIRE_FALSE(result.ok);
+    REQUIRE(result.error == "The profile was signed out or deleted during the sign-in.");
+    REQUIRE(result.account.refresh_token.empty());
+    REQUIRE_FALSE(std::filesystem::exists(account_file));
+    REQUIRE_FALSE(Nextendo::LoadAccount(Profile).has_value());
+    REQUIRE(fake.Hits("/api/oauth/revoke") == 1);
+    REQUIRE(fake.Param("/api/oauth/revoke", "token") == "refresh.new");
+
+    // Signing in again afterwards saves as usual.
+    FakeBrowser again{{"code=def"}};
+    const auto second = Nextendo::SignIn(ClientId, Profile, again.Opener(), {});
+    INFO(second.error);
+    REQUIRE(second.ok);
+    REQUIRE(std::filesystem::exists(account_file));
+    REQUIRE(Nextendo::LoadAccount(Profile)->refresh_token == "refresh.new");
+    REQUIRE(fake.Hits("/api/oauth/revoke") == 1);
+}
+
+TEST_CASE("Nextendo: a sign-in replaces a session the site ended while it ran", "[common]") {
+    FakeNextendo fake;
+    fake.Answer(TokenPath, 200, NewAccessToken);
+    fake.Answer(NexTokenPath, 200, NewGameToken);
+    fake.Answer("/api/nex-session", 200, "{}");
+    fake.Answer("/api/session-status", 200, R"({"revoked":true})");
+    fake.Answer("/api/oauth/revoke", 200, R"({"ok":true})");
+
+    // The old session was ended on the site, and the heartbeat signs it out while the browser step
+    // runs.
+    Nextendo::SaveAccount(Profile, SignedIn(2 * 60 * 60, 30 * 60));
+    auto heartbeat = Nextendo::SignOutReason::None;
+    fake.Before(TokenPath,
+                [&heartbeat] { heartbeat = Nextendo::KeepSessionAlive(ClientId, Profile); });
+    FakeBrowser browser{{"code=abc"}};
+    const auto result = Nextendo::SignIn(ClientId, Profile, browser.Opener(), {});
+    REQUIRE(heartbeat == Nextendo::SignOutReason::SessionRevoked);
+    INFO(result.error);
+    REQUIRE(result.ok);
+    REQUIRE(Nextendo::LoadAccount(Profile)->refresh_token == "refresh.new");
+    REQUIRE(Nextendo::LastSignOutReason(Profile) == Nextendo::SignOutReason::None);
+    REQUIRE(fake.Hits("/api/oauth/revoke") == 0);
 }
 
 TEST_CASE("Nextendo: the BAAS user id is the account id only in Animal Crossing", "[common]") {
@@ -1035,6 +1108,51 @@ TEST_CASE("Nextendo: each profile keeps its own account", "[common]") {
     REQUIRE_FALSE(Nextendo::LoadAccount(OtherProfile).has_value());
     REQUIRE(Nextendo::LoadAccount(Profile)->refresh_token == "refresh.old");
     REQUIRE(Nextendo::CachedFriends(Profile).friends.size() == 2);
+}
+
+TEST_CASE("Nextendo: deleting a profile removes its account", "[common]") {
+    FakeNextendo fake;
+    const auto config = Common::FS::GetEdenPath(Common::FS::EdenPath::ConfigDir);
+    struct NandInConfig {
+        std::filesystem::path previous = Common::FS::GetEdenPath(Common::FS::EdenPath::NANDDir);
+        explicit NandInConfig(const std::filesystem::path& config) {
+            Common::FS::SetEdenPath(Common::FS::EdenPath::NANDDir, config);
+        }
+        ~NandInConfig() {
+            Tests::RestoreEdenPath(Common::FS::EdenPath::NANDDir, previous);
+        }
+    } nand{config};
+
+    Service::Account::ProfileManager manager;
+    REQUIRE(manager.CreateNewUser(Profile, "one").IsSuccess());
+    REQUIRE(manager.CreateNewUser(OtherProfile, "two").IsSuccess());
+    Nextendo::SaveAccount(Profile, SocialSignedIn());
+    Nextendo::SaveAccount(OtherProfile, OtherSignedIn());
+
+    REQUIRE(manager.RemoveUser(OtherProfile));
+    REQUIRE_FALSE(std::filesystem::exists(
+        config / "nextendo" / fmt::format("{}.json", OtherProfile.FormattedString())));
+    REQUIRE_FALSE(Nextendo::LoadAccount(OtherProfile).has_value());
+    REQUIRE(Nextendo::LoadAccount(Profile)->refresh_token == "refresh.old");
+}
+
+TEST_CASE("Nextendo: accounts of profiles the NAND doesn't have are found", "[common]") {
+    FakeNextendo fake;
+    const auto directory = Common::FS::GetEdenPath(Common::FS::EdenPath::ConfigDir) / "nextendo";
+    Nextendo::SaveAccount(Profile, SocialSignedIn());
+    Nextendo::SaveAccount(OtherProfile, OtherSignedIn());
+    for (const char* name : {"zzzzzzzz-zzzz-zzzz-zzzz-zzzzzzzzzzzz.json", "not-a-profile.json",
+                             "00000000-0000-0000-0000-000000000001.json.tmp"}) {
+        std::ofstream{directory / name} << "{}";
+    }
+
+    REQUIRE(Nextendo::OrphanAccounts(std::span<const Common::UUID>{}).empty());
+    const std::array kept{Profile};
+    REQUIRE(Nextendo::OrphanAccounts(kept) == std::vector<Common::UUID>{OtherProfile});
+    REQUIRE(std::filesystem::exists(
+        directory / fmt::format("{}.json", OtherProfile.FormattedString())));
+    const std::array both{Profile, OtherProfile};
+    REQUIRE(Nextendo::OrphanAccounts(both).empty());
 }
 
 TEST_CASE("Nextendo: the heartbeat runs for the profile in use only", "[common]") {

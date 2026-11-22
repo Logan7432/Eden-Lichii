@@ -1527,7 +1527,9 @@ class SettingsFragmentPresenter(
 
             add(HeaderSetting(R.string.cpu))
 
-            add(IntSetting.CPU_BACKEND.key)
+            if (NativeLibrary.isNceSupported()) {
+                add(IntSetting.CPU_BACKEND.key)
+            }
             add(IntSetting.CPU_ACCURACY.key)
             add(BooleanSetting.USE_AUTO_STUB.key)
             add(SettingsItem.FASTMEM_COMBINED)

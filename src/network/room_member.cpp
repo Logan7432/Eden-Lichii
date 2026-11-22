@@ -29,10 +29,21 @@ constexpr auto LinkLogInterval = std::chrono::seconds{30};
 class RoomMember::RoomMemberImpl {
 public:
     void SetState(const State new_state) noexcept {
-        if (state != new_state) {
+        bool changed = false;
+        {
+            std::lock_guard lock{enet_identity_mutex};
+            if (state != new_state) {
+                if (new_state == State::Idle || new_state == State::Joining ||
+                    new_state == State::Uninitialized) {
+                    ++enet_generation;
+                    enet_ready = false;
+                }
+                changed = true;
+            }
             state = new_state;
-            Invoke<State>(state);
         }
+        if (changed)
+            Invoke<State>(new_state);
     }
 
     void SetError(const Error new_error) noexcept {
@@ -64,6 +75,9 @@ public:
     mutable std::mutex username_mutex; ///< Mutex for locking username.
 
     IPv4Address fake_ip; ///< The fake ip of this member.
+    mutable std::mutex enet_identity_mutex;
+    u64 enet_generation = 0;
+    bool enet_ready = false;
 
     std::string room_address;
     std::string last_room_address;
@@ -76,7 +90,12 @@ public:
     /// Thread that receives and dispatches network packets
     std::optional<std::jthread> loop_thread;
     std::mutex send_list_mutex;  ///< Mutex that controls access to the `send_list` variable.
-    std::vector<std::pair<Packet, bool>> send_list; ///< Packets to send and whether each is reliable
+    struct QueuedPacket {
+        Packet bytes;
+        u64 generation;
+        bool reliable;
+    };
+    std::vector<QueuedPacket> send_list;
 
     struct LinkSample {
         u32 rtt{};
@@ -122,7 +141,7 @@ public:
      * Sends data to the room. It will be send on channel 0 with flag RELIABLE
      * @param packet The data to send
      */
-    void Send(Packet&& packet, bool reliable = true);
+    void Send(Packet&& packet, bool reliable = true, u64 generation = 0);
 
     void LogLinkStats(const char* reason);
 
@@ -145,7 +164,7 @@ public:
      * Extracts a MAC Address from a received ENet packet.
      * @param event The ENet event that was received.
      */
-    void HandleJoinPacket(const ENetEvent* event);
+    void HandleJoinPacket(const ENetEvent* event, u64 generation, State joined_state);
     /**
      * Extracts RoomInformation and MemberInformation from a received ENet packet.
      * @param event The ENet event that was received.
@@ -197,7 +216,12 @@ public:
 
 // RoomMemberImpl
 void RoomMember::RoomMemberImpl::StartLoop() {
-    loop_thread.emplace([&](std::stop_token stoken) {
+    u64 generation;
+    {
+        std::lock_guard lock{enet_identity_mutex};
+        generation = enet_generation;
+    }
+    loop_thread.emplace([&, generation](std::stop_token stoken) {
         auto next_sample = std::chrono::steady_clock::now();
         auto next_log = next_sample + LinkLogInterval;
         // Receive packets while the connection is open
@@ -242,16 +266,10 @@ void RoomMember::RoomMemberImpl::StartLoop() {
                         break;
                     case IdJoinSuccess:
                     case IdJoinSuccessAsMod:
-                        // The join request was successful, we are now in the room.
-                        // If we joined successfully, there must be at least one client in the room: us.
-                        ASSERT_MSG(member_information.size() > 0,
-                                "We have not yet received member information.");
-                        HandleJoinPacket(&event); // Get the MAC Address for the client
-                        if (event.packet->data[0] == IdJoinSuccessAsMod) {
-                            SetState(State::Moderator);
-                        } else {
-                            SetState(State::Joined);
-                        }
+                        HandleJoinPacket(&event, generation,
+                                         event.packet->data[0] == IdJoinSuccessAsMod
+                                             ? State::Moderator
+                                             : State::Joined);
                         break;
                     case IdModBanListResponse:
                         HandleModBanListResponsePacket(&event);
@@ -322,19 +340,24 @@ void RoomMember::RoomMemberImpl::StartLoop() {
                     break;
                 }
             }
-            std::vector<std::pair<Packet, bool>> packets;
+            std::vector<QueuedPacket> packets;
             {
                 std::lock_guard send_lock(send_list_mutex);
                 packets.swap(send_list);
             }
-            for (auto const& [packet, reliable] : packets) {
-                ENetPacket* enetPacket =
-                    enet_packet_create(packet.GetData(), packet.GetDataSize(),
-                                       reliable ? ENET_PACKET_FLAG_RELIABLE
-                                                : ENET_PACKET_FLAG_UNSEQUENCED);
+            for (auto const& queued : packets) {
+                std::unique_lock identity_lock{enet_identity_mutex, std::defer_lock};
+                if (queued.generation) {
+                    identity_lock.lock();
+                    if (!enet_ready || queued.generation != enet_generation)
+                        continue;
+                }
+                ENetPacket* enetPacket = enet_packet_create(
+                    queued.bytes.GetData(), queued.bytes.GetDataSize(),
+                    queued.reliable ? ENET_PACKET_FLAG_RELIABLE : ENET_PACKET_FLAG_UNSEQUENCED);
                 enet_peer_send(server, 0, enetPacket);
                 ++link_sent;
-                link_sent_unreliable += reliable ? 0 : 1;
+                link_sent_unreliable += queued.reliable ? 0 : 1;
             }
             enet_host_flush(client);
         }
@@ -342,9 +365,9 @@ void RoomMember::RoomMemberImpl::StartLoop() {
     });
 }
 
-void RoomMember::RoomMemberImpl::Send(Packet&& packet, bool reliable) {
+void RoomMember::RoomMemberImpl::Send(Packet&& packet, bool reliable, u64 generation) {
     std::lock_guard lock(send_list_mutex);
-    send_list.emplace_back(std::move(packet), reliable);
+    send_list.push_back({std::move(packet), generation, reliable});
 }
 
 void RoomMember::RoomMemberImpl::LogLinkStats(const char* reason) {
@@ -443,18 +466,39 @@ void RoomMember::RoomMemberImpl::HandleRoomInformationPacket(const ENetEvent* ev
     Invoke(room_information);
 }
 
-void RoomMember::RoomMemberImpl::HandleJoinPacket(const ENetEvent* event) {
+void RoomMember::RoomMemberImpl::HandleJoinPacket(const ENetEvent* event, u64 generation,
+                                                  State joined_state) {
     Packet packet;
     packet.Append(event->packet->data, event->packet->dataLength);
 
     // Ignore the first byte, which is the message id.
     packet.IgnoreBytes(sizeof(u8)); // Ignore the message type
 
-    // Parse the MAC Address from the packet
-    packet.Read(fake_ip);
-    reclaiming_fake_ip = false;
-    last_room_address = room_address;
-    last_fake_ip = fake_ip;
+    IPv4Address ip{};
+    packet.Read(ip.data(), ip.size());
+    const bool valid = packet && ip != IPv4Address{};
+    const State next = valid ? joined_state : State::Idle;
+    {
+        std::lock_guard lock{enet_identity_mutex};
+        if (generation != enet_generation || state != State::Joining)
+            return;
+        if (valid) {
+            fake_ip = ip;
+            enet_ready = true;
+        } else {
+            ++enet_generation;
+            enet_ready = false;
+        }
+        state = next;
+    }
+    if (valid) {
+        reclaiming_fake_ip = false;
+        last_room_address = room_address;
+        last_fake_ip = ip;
+    }
+    Invoke<State>(next);
+    if (!valid)
+        SetError(Error::UnknownError);
 }
 
 void RoomMember::RoomMemberImpl::HandleProxyPackets(const ENetEvent* event) {
@@ -561,7 +605,7 @@ void RoomMember::RoomMemberImpl::HandleModBanListResponsePacket(const ENetEvent*
 
 void RoomMember::RoomMemberImpl::Disconnect() {
     {
-        std::lock_guard lock(member_information_mutex);
+        std::lock_guard lock{member_information_mutex};
         member_information.clear();
     }
     room_information.member_slots = 0;
@@ -679,6 +723,19 @@ GameInfo RoomMember::GetCurrentGameInfo() const {
     return room_member_impl->current_game_info;
 }
 
+RoomMember::MemberList RoomMember::GetMemberInformationSnapshot() const {
+    std::lock_guard lock{room_member_impl->member_information_mutex};
+    return room_member_impl->member_information;
+}
+
+std::optional<RoomMember::ENetIdentity> RoomMember::GetENetIdentity() const {
+    const auto& p = *room_member_impl;
+    std::lock_guard lock{p.enet_identity_mutex};
+    if (!p.enet_ready)
+        return std::nullopt;
+    return ENetIdentity{p.fake_ip, p.enet_generation};
+}
+
 const std::string& RoomMember::GetNickname() const {
     return room_member_impl->nickname;
 }
@@ -762,7 +819,13 @@ bool RoomMember::IsConnected() const {
     return room_member_impl->IsConnected();
 }
 
-void RoomMember::SendProxyPacket(const ProxyPacket& proxy_packet, bool reliable) {
+bool RoomMember::SendProxyPacket(const ProxyPacket& proxy_packet, bool reliable) {
+    auto& p = *room_member_impl;
+    std::lock_guard identity_lock{p.enet_identity_mutex};
+    if (!p.enet_ready || !proxy_packet.enet_generation ||
+        proxy_packet.enet_generation != p.enet_generation ||
+        proxy_packet.local_endpoint.ip != p.fake_ip)
+        return false;
     Packet packet;
     packet.Write(static_cast<u8>(IdProxyPacket));
 
@@ -778,7 +841,8 @@ void RoomMember::SendProxyPacket(const ProxyPacket& proxy_packet, bool reliable)
     packet.Write(proxy_packet.broadcast);
     packet.Write(proxy_packet.data);
 
-    room_member_impl->Send(std::move(packet), reliable);
+    room_member_impl->Send(std::move(packet), reliable, proxy_packet.enet_generation);
+    return true;
 }
 
 void RoomMember::DeliverLoopbackProxyPacket(const ProxyPacket& proxy_packet) {
@@ -888,6 +952,10 @@ void RoomMember::Unbind(CallbackHandle<T> handle) {
 void RoomMember::Leave() {
     room_member_impl->SetState(State::Idle);
     room_member_impl->loop_thread.reset();
+    {
+        std::lock_guard lock{room_member_impl->send_list_mutex};
+        room_member_impl->send_list.clear();
+    }
     enet_host_destroy(room_member_impl->client);
     room_member_impl->client = nullptr;
 }

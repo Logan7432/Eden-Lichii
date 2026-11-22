@@ -559,7 +559,7 @@ void LibraryView::SetFavorite(quint64 program_id, bool favorite) {
 
 void LibraryView::OpenSettingsCurrent() {
     if (const Entry* entry = CurrentEntry()) {
-        emit SettingsRequested(entry->path);
+        emit SettingsRequested(entry->path, entry->program_id);
     }
 }
 
