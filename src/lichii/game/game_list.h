@@ -97,9 +97,10 @@ public:
     void SetFilterVisible(bool visibility);
     void FocusDefault();
     bool IsEmpty() const;
+    bool IsPopulating() const;
 
     void PopulateAsync(QVector<UISettings::GameDir>& game_dirs);
-    void SetScanEnabled(bool enabled);
+    void SetScanEnabled(bool enabled, bool stop_worker = true);
     void SetReportableProgramId(u64 program_id);
 
     void SaveInterfaceLayout();

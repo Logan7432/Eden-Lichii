@@ -17,6 +17,7 @@ public:
 
     void ReloadAllValues() override;
     void SaveAllValues() override;
+    bool SetAddonEnabled(u64 title_id, const std::string& name, bool enabled);
 
     void ReadQtControlPlayerValues(std::size_t player_index);
     void SaveQtControlPlayerValues(std::size_t player_index);
